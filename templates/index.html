@@ -55,6 +55,7 @@ tbody tr{cursor:pointer}tbody tr:hover{background:#142237}tr.off td{color:var(--
 .tip{position:absolute;pointer-events:none;background:#0a101b;border:1px solid var(--line);border-radius:7px;padding:4px 8px;font-size:12px;white-space:nowrap}
 .ranges{display:flex;gap:6px}.ranges button{padding:5px 10px}.ranges button[aria-pressed=true]{background:#173a58;border-color:#28618e}
 .empty{color:var(--muted);padding:10px}
+.panel>summary{cursor:pointer;font-size:15px;font-weight:600}.panel[open]>summary{margin-bottom:15px}.panel>summary span{font-weight:400}
 dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:14px;padding:20px;width:min(420px,92vw)}
 dialog::backdrop{background:rgba(5,9,15,.7)}dialog input{width:100%;margin:12px 0}
 dialog menu{display:flex;justify-content:flex-end;gap:8px;margin:0;padding:0}
@@ -82,6 +83,9 @@ dialog menu{display:flex;justify-content:flex-end;gap:8px;margin:0;padding:0}
 <div class="ranges" id="ranges"><button type="button" data-h="1">1 h</button><button type="button" data-h="6">6 h</button><button type="button" data-h="24">24 h</button><button type="button" data-h="168">7 g</button></div>
 <button type="button" id="closeHistory">Chiudi</button></div>
 <div class="chart-box"><canvas id="chart" class="chart" role="img" aria-label="Signal strength chart over time"></canvas><div class="tip" id="tip" hidden></div></div></section>
+<details class="panel" id="diag"><summary>Diagnostica sorgenti <span class="footer" id="diagSum"></span></summary>
+<div class="table-wrap"><table style="min-width:680px"><thead><tr><th>Sorgente</th><th>Stato</th><th>Ultimo ok</th><th>Durata</th><th>Ultima lettura / errore</th><th>Errori di fila</th></tr></thead><tbody id="diagRows"></tbody></table></div>
+<p class="footer" id="diagFoot" style="margin-top:10px"></p></details>
 <p class="footer" style="margin:16px 3px">Ultimo aggiornamento: <span id="fulltime">—</span> · storico locale SQLite</p>
 <dialog id="dlg"><form method="dialog" id="renameForm"><h3>Rinomina dispositivo</h3><div class="mono muted" id="dlgMac"></div>
 <input id="dlgName" maxlength="80" autocomplete="off" placeholder="Label (vuoto = rimuovi)" aria-label="Label del dispositivo">
@@ -95,7 +99,8 @@ const strength=x=>x==null?'':x>=TH().good?'good':x>TH().warn?'mid':'bad';
 const badge=x=>x==null?'<span class="muted">—</span>':`<span class="rssi ${strength(x)}">${esc(x)} dBm</span>`;
 const fmt=n=>n==null?'—':Number(n).toLocaleString('it-IT',{maximumFractionDigits:1});
 const ago=ts=>{if(!ts)return 'mai visto';const s=Date.now()/1000-ts;return s<90?'ora':s<5400?`${Math.round(s/60)} min fa`:s<172800?`${Math.round(s/3600)} h fa`:`${Math.round(s/86400)} g fa`};
-const link=d=>d.connected?(d.ap_name?`${d.ap_name}${d.connection?' · '+d.connection:''}`:d.ap):`Non connesso · visto ${ago(d.last_seen)}`;
+const seen=ts=>ts?'visto '+ago(ts):'mai visto online';
+const link=d=>d.connected?(d.ap_name?`${d.ap_name}${d.connection?' · '+d.connection:''}`:d.ap):`Non connesso · ${seen(d.last_seen)}`;
 const rates=d=>d.tx==null&&d.rx==null?'—':`${fmt(d.tx)} / ${fmt(d.rx)} Mbps`;
 async function api(url,opts={}){const r=await fetch(url,{cache:'no-store',...opts,headers:{'X-Requested-With':'dashboard',...(opts.headers||{})}});if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}
 async function refresh(){try{const s=await api('/api/data'+(TS?`?since=${TS}`:''));if(!s.unchanged)render(s)}catch(e){$('errors').innerHTML='<div class="notice">Dashboard non raggiungibile.</div>'}}
@@ -112,8 +117,12 @@ function render(s){S=s;TS=s.ts;DATA=s.data;const ds=DATA?.devices||[],live=ds.fi
  const o=DATA?.opal,sig=o?.sta?.signal,rs=ow.filter(d=>d.rssi!=null);
  $('uplinkNum').innerHTML=sig==null?'—':`<span class="${strength(sig)}">${sig} dBm</span>`;
  $('uplinkSub').textContent=o?[o.snr!=null?`SNR ${o.snr} dB`:'',rs.length?`client Opal: peggiore ${Math.min(...rs.map(d=>d.rssi))} dBm`:''].filter(Boolean).join(' · ')||'\u00a0':'Opal non raggiungibile';
- drawTopology();drawTable();if(!$('historyPanel').hidden)loadHistory()}
-function card(d){return `<div class="device${d.connected?'':' off'}" data-mac="${esc(d.mac)}" tabindex="0" role="button"><div class="dtop"><span class="dname" title="${esc(d.name)}">${esc(d.name||'Senza label')}</span>${badge(d.rssi)}</div><div class="dmeta">${esc(d.ip||'IP non disponibile')} · ${esc(d.mac)}</div><div class="dmeta">${esc(d.connected?d.band:'visto '+ago(d.last_seen))}</div></div>`}
+ drawTopology();drawTable();renderDiag(s.health);if(!$('historyPanel').hidden)loadHistory()}
+function renderDiag(h){if(!h)return;const src=Object.values(h.sources),bad=src.filter(x=>x.ok===false).length;
+ $('diagRows').innerHTML=src.map(x=>`<tr><td>${esc(x.label)}</td><td><span class="${x.ok==null?'muted':x.ok?'good':'bad'}">${x.ok==null?'in attesa':x.ok?'● ok':'● errore'}</span></td><td>${x.last_ok?esc(ago(x.last_ok)):'—'}</td><td>${x.duration!=null?fmt(x.duration)+' s':'—'}</td><td>${x.ok===false?`<span class="bad">${esc(x.last_error)}</span>`:esc(x.detail||'—')}</td><td>${x.fails||0}</td></tr>`).join('');
+ $('diagSum').textContent=bad?`· ${bad} sorgente/i in errore`:'· tutto regolare';
+ $('diagFoot').textContent=`Ciclo n. ${h.cycle}, ogni ${h.poll} s · in esecuzione da ${ago(h.started).replace(' fa','')}`}
+function card(d){return `<div class="device${d.connected?'':' off'}" data-mac="${esc(d.mac)}" tabindex="0" role="button"><div class="dtop"><span class="dname" title="${esc(d.name)}">${esc(d.name||'Senza label')}</span>${badge(d.rssi)}</div><div class="dmeta">${esc(d.ip||'IP non disponibile')} · ${esc(d.mac)}</div><div class="dmeta">${esc(d.connected?d.band:seen(d.last_seen))}</div></div>`}
 const grp=(cls,title,list,open)=>list.length?`<div class="group ${cls}"><h3>${title} <span>· ${list.length}</span></h3><div class="device-grid">${list.map(card).join('')}</div></div>`:'';
 function drawTopology(){if(!DATA)return;const ds=DATA.devices,by=g=>ds.filter(d=>d.group===g&&d.connected);
  let h=`<div class="router"><div class="node"><div class="node-title">Internet</div><small>Rete locale</small></div><span class="arrow">⟷</span><div class="node"><div class="node-title">TP-Link Archer AX55</div><small>${esc(DATA.router.fw||'Stato non disponibile')}</small></div></div>`;

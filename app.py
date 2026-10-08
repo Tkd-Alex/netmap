@@ -3,8 +3,11 @@
 Run with a SINGLE process (polling lives in a thread):
     waitress-serve --listen=0.0.0.0:8080 --threads=4 app:app
 """
+import copy
 import hmac
 import json
+import logging
+import logging.handlers
 import os
 import re
 import sqlite3
@@ -90,8 +93,39 @@ BAND = {"wired": "RJ45", "opal_wired": "RJ45", "w5": "5 GHz", "w2": "2.4 GHz", "
         "guest": "2.4 GHz", "opal": "2.4 GHz"}
 UPLINK_ID = "opal:uplink"  # pseudo-MAC by which the uplink signal is historicized
 
+# ───────────────────────────── Log and diagnostics ─────────────────────────────
+
+log = logging.getLogger("netmap")
+
+
+def setup_logging():
+    """INFO: a summary per cycle + events. DEBUG: includes tracebacks. LOG_FILE enables a file with rotation."""
+    if log.handlers:
+        return
+    level = getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
+    fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", "%Y-%m-%d %H:%M:%S")
+    handlers = [logging.StreamHandler()]
+    if os.getenv("LOG_FILE"):
+        handlers.append(logging.handlers.RotatingFileHandler(os.getenv("LOG_FILE"), maxBytes=1_000_000,
+                                                             backupCount=3, encoding="utf-8"))
+    log.setLevel(level)
+    log.propagate = False
+    for handler in handlers:
+        handler.setFormatter(fmt)
+        log.addHandler(handler)
+    logging.getLogger("paramiko").setLevel(logging.WARNING)
+    if level > logging.DEBUG:
+        logging.getLogger("werkzeug").setLevel(logging.WARNING)  # no line for each HTTP request
+
+
+# Health status of each source, shown in the "Diagnostics" panel and at /api/health.
+HEALTH = {key: dict(label=label, ok=None, last_ok=None, last_try=None, duration=None, fails=0,
+                    last_error=None, detail="")
+          for key, label in (("router", "Home Assistant · AX55"), ("opal", "Opal (SSH)"), ("db", "Database"))}
+STARTED = time.time()
+
 app = Flask(__name__)
-STATE = {"ts": None, "errors": {}, "data": None}  # replaced in its entirety at each cycle (no read locks)
+STATE = {"ts": None, "errors": {}, "data": None, "health": None}  # replaced in its entirety at each cycle (no read locks)
 META = {"seq": 0}
 COND = threading.Condition()
 WAKE = threading.Event()
@@ -119,6 +153,7 @@ class OpalLink:
 
     def __init__(self):
         self.client = None
+        self.new_session = False
         self.lock = threading.Lock()
 
     def _connect(self):
@@ -134,6 +169,8 @@ class OpalLink:
                        auth_timeout=8, allow_agent=True, look_for_keys=True,
                        disabled_algorithms=dict(pubkeys=["rsa-sha2-256", "rsa-sha2-512"]))
         client.get_transport().set_keepalive(20)
+        self.new_session = True
+        log.info("Opal: new SSH session to %s@%s:%s", CFG["opal_user"], CFG["opal_host"], CFG["opal_port"])
         return client
 
     def close(self):
@@ -146,6 +183,7 @@ class OpalLink:
 
     def run(self, command):
         with self.lock:
+            self.new_session = False
             for attempt in (1, 2):
                 try:
                     transport = self.client.get_transport() if self.client else None
@@ -192,7 +230,11 @@ def fetch_opal():
     command = (f"echo '##AP'; iwinfo {ap} info; echo '##ASSOC'; iwinfo {ap} assoclist; "
                f"echo '##STA'; iwinfo {sta} info; echo '##MAC'; cat /sys/class/net/{sta}/address; "
                "echo '##NEIGH'; ip neigh show; echo '##FDB'; bridge fdb show 2>/dev/null")
-    return parse_opal(OPAL.run(command))
+    output = OPAL.run(command)
+    parsed = parse_opal(output)
+    parsed["meta"] = dict(detail=f"{len(parsed['clients'])} Wi-Fi clients, {len(parsed['wired'])} wired · "
+                                 f"SSH {'new' if OPAL.new_session else 'reused'} · {len(output)} B")
+    return parsed
 
 
 # ──────────────────────── Home Assistant (AX55) ────────────────────────
@@ -237,19 +279,23 @@ def _ha_trackers():
             r = HA.post(f"{CFG['ha_url']}/api/template", json={"template": HA_TEMPLATE}, headers=headers,
                         timeout=12, verify=CFG["ha_verify"])
             r.raise_for_status()
-            return json.loads(r.text)
-        except (ValueError, requests.HTTPError):
+            return json.loads(r.text), "template", len(r.content), None
+        except (ValueError, requests.HTTPError) as exc:
             _template_ok = False  # template not supported/valid: falling back to /api/states
+            log.warning("Home Assistant: template cannot be used (%s), falling back to /api/states", exc)
     r = HA.get(f"{CFG['ha_url']}/api/states", headers=headers, timeout=12, verify=CFG["ha_verify"])
     r.raise_for_status()
-    return [e for e in r.json() if e.get("entity_id", "").startswith("device_tracker.")]
+    states = r.json()
+    return ([e for e in states if e.get("entity_id", "").startswith("device_tracker.")], "/api/states",
+            len(r.content), len(states))
 
 
 def fetch_home_assistant():
     if not CFG["ha_url"] or not CFG["ha_token"]:
         raise RuntimeError("Configure HA_URL and HA_TOKEN in the .env file to read the AX55 from Home Assistant.")
     devices = []
-    for entity in _ha_trackers():
+    entities, mode, size, total = _ha_trackers()
+    for entity in entities:
         attrs = entity.get("attributes") or {}
         if (attrs.get("source_type") or entity.get("source_type")) not in (None, "router"):
             continue
@@ -264,7 +310,10 @@ def fetch_home_assistant():
             ap_name=str(attrs.get("ap_name") or "").lstrip("* "), signal=attrs.get("signal"),
             active=entity.get("state") == "home", tx=_ha_rate_mbps(attrs.get("tx_rate")),
             rx=_ha_rate_mbps(attrs.get("rx_rate")), ssid=attrs.get("ssid") or ""))
-    return dict(fw="TP-Link AX55 · data from Home Assistant", devices=devices)
+    detail = (f"{len(entities)} trackers received, {len(devices)} valid · template · {size / 1024:.0f} KB"
+              if total is None else
+              f"{len(entities)} trackers out of {total} entities downloaded · {size / 1024:.0f} KB (template not available)")
+    return dict(fw="TP-Link AX55 · data from Home Assistant", devices=devices, meta=dict(detail=detail))
 
 
 # ───────────────────────────── Names/labels ─────────────────────────────
@@ -390,6 +439,7 @@ def save_history(data, now):
         rows.append((now, UPLINK_ID, None, None, "Uplink Opal", "5 GHz", sta.get("essid"), sta["signal"], None, None))
     with dbx() as db:
         db.executemany("INSERT INTO samples VALUES(?,?,?,?,?,?,?,?,?,?)", rows)
+    return len(rows)
 
 
 def track_seen(data, now):
@@ -413,45 +463,136 @@ def track_seen(data, now):
                        upserts)
 
 
+def db_stats():
+    with dbx() as db:
+        rows = db.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
+    size = sum(os.path.getsize(p) for p in (CFG["db"], CFG["db"] + "-wal") if os.path.exists(p))
+    HEALTH["db"]["detail"] = f"{rows:,} samples · {size / 1e6:.1f} MB".replace(",", ".")
+    return rows, size
+
+
 def prune():
     with dbx() as db:
-        db.execute("DELETE FROM samples WHERE ts < ?", (time.time() - CFG["retention_days"] * 86400,))
+        deleted = db.execute("DELETE FROM samples WHERE ts < ?",
+                             (time.time() - CFG["retention_days"] * 86400,)).rowcount
+    if deleted > 100_000:  # after a major cleanup, it frees up disk space
+        con = sqlite3.connect(CFG["db"], timeout=60)
+        try:
+            con.execute("VACUUM")
+        finally:
+            con.close()
+    rows, size = db_stats()
+    log.info("DB cleanup: deleted %d samples older than %d days · %d samples remaining, %.1f MB",
+             deleted, CFG["retention_days"], rows, size / 1e6)
 
 
 # ───────────────────────────── Data collection ─────────────────────────────
 
-def _take(future, label, key, errors, stale):
+def _timed(fn):
+    t0 = time.perf_counter()
     try:
-        value = future.result()
-        LAST[key] = (time.time(), value)
-        return value
+        return fn(), time.perf_counter() - t0
     except Exception as exc:
-        errors[label] = f"{type(exc).__name__}: {exc}"
-        if key in LAST and time.time() - LAST[key][0] < 600:  # keep last good data for up to 10 minutes
-            stale[key] = int(time.time() - LAST[key][0])
+        exc.elapsed = time.perf_counter() - t0
+        raise
+
+
+def _take(future, key, errors, stale):
+    health, now = HEALTH[key], time.time()
+    health["last_try"] = now
+    try:
+        value, elapsed = future.result()
+    except Exception as exc:
+        message = f"{type(exc).__name__}: {exc}"
+        health.update(ok=False, duration=getattr(exc, "elapsed", None), last_error=message, fails=health["fails"] + 1)
+        errors[health["label"]] = message
+        if health["fails"] == 1 or health["fails"] % 20 == 0:  # no flood of duplicate log lines
+            log.warning("%s: ERROR · %s (attempt #%d)", health["label"], message, health["fails"])
+        log.debug("Error details %s", health["label"], exc_info=True)
+        if key in LAST and now - LAST[key][0] < 600:  # keep last good data for up to 10 minutes
+            stale[key] = int(now - LAST[key][0])
             return LAST[key][1]
         return None
+    if health["fails"]:
+        log.info("%s: recovered after %d consecutive errors", health["label"], health["fails"])
+    health.update(ok=True, last_ok=now, duration=round(elapsed, 2), fails=0, last_error=None,
+                  detail=(value.get("meta") or {}).get("detail", ""))
+    LAST[key] = (now, value)
+    return value
+
+
+def _names(*datas):
+    out = {}
+    for data in datas:
+        out.update({d["mac"]: d["name"] for d in (data or {}).get("devices", [])})
+    return out
+
+
+def log_changes(prev, data):
+    """Records events: connections/disconnections, moves between access points, and uplink changes."""
+    if not prev:
+        return
+    names = _names(prev, data)
+    before = {d["mac"]: d for d in prev["devices"] if d["connected"]}
+    after = {d["mac"]: d for d in data["devices"] if d["connected"]}
+
+    def fmt(macs):
+        items = [names.get(m, m) for m in sorted(macs)]
+        return ", ".join(items[:8]) + (f" (+{len(items) - 8} others)" if len(items) > 8 else "")
+
+    joined, left = after.keys() - before.keys(), before.keys() - after.keys()
+    if joined or left:
+        log.info("Devices · connected: %s · disconnected: %s", fmt(joined) or "—", fmt(left) or "—")
+    for mac in before.keys() & after.keys():
+        if before[mac]["ap"] != after[mac]["ap"]:
+            log.info("Move: %s from «%s» to «%s»", names[mac], before[mac]["ap"], after[mac]["ap"])
+    old, new = (prev.get("opal") or {}).get("sta", {}), (data.get("opal") or {}).get("sta", {})
+    if old.get("bssid") and new.get("bssid") and old["bssid"] != new["bssid"]:
+        log.warning("Opal uplink changed: %s → %s (%s)", old["bssid"], new["bssid"], data["opal"]["uplink"])
+
+
+def _source_summary(key, name):
+    h = HEALTH[key]
+    if h["ok"]:
+        return f"{name} ok {h['duration']:.2f} s" + (f" ({h['detail']})" if h["detail"] else "")
+    return f"{name} ERROR" + (f" after {h['duration']:.1f} s" if h["duration"] is not None else "")
 
 
 def collect():
     global STATE
+    started = time.perf_counter()
     errors, stale = {}, {}
     with ThreadPoolExecutor(2) as pool:
-        f_router, f_opal = pool.submit(fetch_home_assistant), pool.submit(fetch_opal)
-        router = _take(f_router, "Home Assistant · AX55", "router", errors, stale)
-        opal = _take(f_opal, "Opal", "opal", errors, stale)
+        f_router, f_opal = pool.submit(_timed, fetch_home_assistant), pool.submit(_timed, fetch_opal)
+        router = _take(f_router, "router", errors, stale)
+        opal = _take(f_opal, "opal", errors, stale)
     now = round(time.time(), 3)
     data = build(router or dict(fw=None, devices=[]), opal, read_names())
     data["stale"] = stale
+    saved, db = 0, HEALTH["db"]
+    db["last_try"] = now
     for step in (track_seen, save_history):
         try:
-            step(data, now)
+            result = step(data, now)
+            saved = result if step is save_history else saved
         except Exception as exc:
-            errors["database"] = f"{type(exc).__name__}: {exc}"
+            message = f"{type(exc).__name__}: {exc}"
+            errors["database"] = message
+            db.update(ok=False, last_error=message, fails=db["fails"] + 1)
+            if db["fails"] == 1 or db["fails"] % 20 == 0:
+                log.warning("Database: ERROR · %s", message)
+    if "database" not in errors:
+        db.update(ok=True, last_ok=now, fails=0, last_error=None)
+    log_changes(STATE["data"], data)
+    live = sum(d["connected"] for d in data["devices"])
     with COND:
-        STATE = dict(ts=now, errors=errors, data=data)
         META["seq"] += 1
+        STATE = dict(ts=now, errors=errors, data=data,
+                     health=dict(cycle=META["seq"], poll=CFG["poll"], started=STARTED, sources=copy.deepcopy(HEALTH)))
         COND.notify_all()
+    log.info("Cycle %d · %s · %s · %d/%d connected · +%d samples · %.2f s total", META["seq"],
+             _source_summary("router", "HA"), _source_summary("opal", "Opal"), live, len(data["devices"]),
+             saved, time.perf_counter() - started)
 
 
 def poll_loop():
@@ -460,6 +601,7 @@ def poll_loop():
         init_db()
     except Exception as exc:
         STATE = dict(STATE, errors={"database": f"{type(exc).__name__}: {exc}"})
+        log.error("Database cannot be initialized: %s", exc)
     last_prune = 0
     while True:
         try:
@@ -469,6 +611,7 @@ def poll_loop():
                 last_prune = time.time()
         except Exception as exc:
             STATE = dict(STATE, errors={"collector": f"{type(exc).__name__}: {exc}"})
+            log.exception("Unexpected error during the collection cycle")
         WAKE.wait(CFG["poll"])
         WAKE.clear()
 
@@ -477,6 +620,12 @@ def start_worker():
     global _started
     if not _started:
         _started = True
+        setup_logging()
+        log.info("Start · every %d s · HA %s · Opal %s@%s:%s (AP %s, uplink %s, LAN ports %s) · DB %s (%d d) · "
+                 "auth %s · log %s", CFG["poll"], CFG["ha_url"] or "NOT CONFIGURED", CFG["opal_user"],
+                 CFG["opal_host"], CFG["opal_port"], CFG["ap_if"], CFG["sta_if"],
+                 ",".join(CFG["lan_ifs"]) or "—", CFG["db"], CFG["retention_days"],
+                 "on" if CFG["auth_user"] else "off", logging.getLevelName(log.level))
         threading.Thread(target=poll_loop, daemon=True, name="network-poller").start()
 
 
@@ -507,6 +656,19 @@ def api_data():
     if since is not None and state["ts"] == since:
         return jsonify(unchanged=True)
     return jsonify(state)
+
+
+@app.get("/api/health")
+def api_health():
+    """200 if everything is fine, 503 otherwise: designed for Uptime Kuma or other monitoring tools."""
+    state, now = STATE, time.time()
+    if not state["ts"]:
+        return jsonify(status="starting"), 503
+    failing = [k for k, h in state["health"]["sources"].items() if h["ok"] is False]
+    age = int(now - state["ts"])
+    ok = not failing and age <= CFG["poll"] * 3
+    return jsonify(status="ok" if ok else "degraded", failing=failing, last_cycle_age_s=age,
+                   cycles=state["health"]["cycle"]), (200 if ok else 503)
 
 
 @app.post("/api/refresh")
