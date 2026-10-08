@@ -1,4 +1,4 @@
 Flask>=3,<4
 paramiko>=3.4,<4
-tplinkrouterc6u>=5.35,<6
+requests>=2.31,<3
 gunicorn>=22,<24
