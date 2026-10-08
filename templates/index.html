@@ -82,7 +82,13 @@ dialog menu{display:flex;justify-content:flex-end;gap:8px;margin:0;padding:0}
 <section class="panel" id="historyPanel" hidden><div class="panel-head"><h2 id="historyTitle">Storico segnale</h2>
 <div class="ranges" id="ranges"><button type="button" data-h="1">1 h</button><button type="button" data-h="6">6 h</button><button type="button" data-h="24">24 h</button><button type="button" data-h="168">7 g</button></div>
 <button type="button" id="closeHistory">Chiudi</button></div>
+<p class="footer" style="margin:-6px 0 10px">Vertical lines: purple = AP/band change · green = connected · red = disconnected</p>
 <div class="chart-box"><canvas id="chart" class="chart" role="img" aria-label="Signal strength chart over time"></canvas><div class="tip" id="tip" hidden></div></div></section>
+<details class="panel" id="evPanel"><summary>Access point changes and connections <span class="footer" id="evSum"></span></summary>
+<div class="panel-head"><span class="footer" style="flex:1">Quanto spesso i dispositivi passano tra Opal, AX55 ed extender, o cambiano banda. Clic su una riga per vedere lo storico.</span><div class="ranges" id="evRanges"><button type="button" data-h="24" aria-pressed="true">24 h</button><button type="button" data-h="168">7 g</button></div></div>
+<div class="table-wrap"><table style="min-width:520px"><thead><tr><th>Most unstable</th><th>AP changes</th><th>Band/network changes</th><th>Disconnections</th></tr></thead><tbody id="evTop"></tbody></table></div>
+<div class="table-wrap" style="margin-top:14px;max-height:360px"><table style="min-width:620px"><thead><tr><th>Quando</th><th>Dispositivo</th><th>Evento</th><th>Da → a</th></tr></thead><tbody id="evList"></tbody></table></div>
+<p class="footer" style="margin-top:10px">Events are recorded only when both AX55 and Opal respond: accuracy depends on the refresh cycle and the time routers take to declare a client disconnected.</p></details>
 <details class="panel" id="diag"><summary>Diagnostica sorgenti <span class="footer" id="diagSum"></span></summary>
 <div class="table-wrap"><table style="min-width:680px"><thead><tr><th>Sorgente</th><th>Stato</th><th>Ultimo ok</th><th>Durata</th><th>Ultima lettura / errore</th><th>Errori di fila</th></tr></thead><tbody id="diagRows"></tbody></table></div>
 <p class="footer" id="diagFoot" style="margin-top:10px"></p></details>
@@ -100,7 +106,7 @@ const badge=x=>x==null?'<span class="muted">—</span>':`<span class="rssi ${str
 const fmt=n=>n==null?'—':Number(n).toLocaleString('it-IT',{maximumFractionDigits:1});
 const ago=ts=>{if(!ts)return 'mai visto';const s=Date.now()/1000-ts;return s<90?'ora':s<5400?`${Math.round(s/60)} min fa`:s<172800?`${Math.round(s/3600)} h fa`:`${Math.round(s/86400)} g fa`};
 const seen=ts=>ts?'visto '+ago(ts):'mai visto online';
-const link=d=>d.connected?(d.ap_name?`${d.ap_name}${d.connection?' · '+d.connection:''}`:d.ap):`Non connesso · ${seen(d.last_seen)}`;
+const link=d=>d.connected?(d.ap_name?`${d.ap_name}${d.connection?' · '+d.connection:''}`:d.ap):`Non connesso · ${seen(d.last_seen)}${d.arp?` · ARP Opal: ${d.arp}`:''}`;
 const rates=d=>d.tx==null&&d.rx==null?'—':`${fmt(d.tx)} / ${fmt(d.rx)} Mbps`;
 async function api(url,opts={}){const r=await fetch(url,{cache:'no-store',...opts,headers:{'X-Requested-With':'dashboard',...(opts.headers||{})}});if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}
 async function refresh(){try{const s=await api('/api/data'+(TS?`?since=${TS}`:''));if(!s.unchanged)render(s)}catch(e){$('errors').innerHTML='<div class="notice">Dashboard non raggiungibile.</div>'}}
@@ -117,7 +123,7 @@ function render(s){S=s;TS=s.ts;DATA=s.data;const ds=DATA?.devices||[],live=ds.fi
  const o=DATA?.opal,sig=o?.sta?.signal,rs=ow.filter(d=>d.rssi!=null);
  $('uplinkNum').innerHTML=sig==null?'—':`<span class="${strength(sig)}">${sig} dBm</span>`;
  $('uplinkSub').textContent=o?[o.snr!=null?`SNR ${o.snr} dB`:'',rs.length?`client Opal: peggiore ${Math.min(...rs.map(d=>d.rssi))} dBm`:''].filter(Boolean).join(' · ')||'\u00a0':'Opal non raggiungibile';
- drawTopology();drawTable();renderDiag(s.health);if(!$('historyPanel').hidden)loadHistory()}
+ drawTopology();drawTable();renderDiag(s.health);if($('evPanel').open)loadEvents();if(!$('historyPanel').hidden)loadHistory()}
 function renderDiag(h){if(!h)return;const src=Object.values(h.sources),bad=src.filter(x=>x.ok===false).length;
  $('diagRows').innerHTML=src.map(x=>`<tr><td>${esc(x.label)}</td><td><span class="${x.ok==null?'muted':x.ok?'good':'bad'}">${x.ok==null?'in attesa':x.ok?'● ok':'● errore'}</span></td><td>${x.last_ok?esc(ago(x.last_ok)):'—'}</td><td>${x.duration!=null?fmt(x.duration)+' s':'—'}</td><td>${x.ok===false?`<span class="bad">${esc(x.last_error)}</span>`:esc(x.detail||'—')}</td><td>${x.fails||0}</td></tr>`).join('');
  $('diagSum').textContent=bad?`· ${bad} sorgente/i in errore`:'· tutto regolare';
@@ -144,7 +150,13 @@ function drawTable(){if(!DATA)return;const q=$('filter').value.toLowerCase(),cf=
  $('rows').innerHTML=ds.map(d=>`<tr class="${d.connected?'':'off'}" data-mac="${esc(d.mac)}" tabindex="0"><td><b>${esc(d.name||'—')}</b> <button type="button" class="rename" data-name="${esc(d.name||'')}" title="Rinomina" aria-label="Rinomina ${esc(d.name||d.mac)}">✎</button></td><td>${esc(d.ip||'—')}</td><td class="mono">${esc(d.mac)}</td><td>${esc(link(d))}</td><td>${esc(d.connected?d.band:'—')}</td><td>${esc(d.ssid||'—')}</td><td>${badge(d.rssi)}</td><td>${rates(d)}</td></tr>`).join('')}
 function openRename(mac,current){$('dlgMac').textContent=mac;$('dlgName').value=current||'';$('dlg').dataset.mac=mac;$('dlg').showModal();$('dlgName').select()}
 async function saveName(){const mac=$('dlg').dataset.mac;try{await api('/api/names/'+encodeURIComponent(mac),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('dlgName').value})});await refreshNow()}catch(e){$('errors').innerHTML='<div class="notice">Salvataggio della label non riuscito.</div>'}}
-async function loadHistory(){const {mac,hours}=hist;try{const r=await api(`/api/history?mac=${encodeURIComponent(mac)}&hours=${hours}`);hist.res=r;drawChart(r)}catch(e){hist.res=null}}
+async function loadHistory(){const {mac,hours}=hist;try{const [r,e]=await Promise.all([api(`/api/history?mac=${encodeURIComponent(mac)}&hours=${hours}`),api(`/api/events?mac=${encodeURIComponent(mac)}&hours=${hours}`).catch(()=>({events:[]}))]);hist.res=r;hist.events=e.events||[];drawChart(r)}catch(e){hist.res=null}}
+let evHours=24;const KIND={move_ap:['AP change','mid'],move_band:['Band/network change','mid'],connect:['Connected','good'],disconnect:['Disconnected','bad']};
+async function loadEvents(){try{drawEvents(await api(`/api/events?hours=${evHours}`))}catch(e){$('evList').innerHTML='<tr><td colspan="4" class="bad">Eventi non disponibili.</td></tr>'}}
+function drawEvents(r){const t=r.totals||{},when=ts=>new Date(ts*1000).toLocaleString('it-IT',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+ $('evSum').textContent=`· ${(t.move_ap||0)+(t.move_band||0)} cambi, ${t.disconnect||0} disconnessioni nelle ultime ${evHours>24?evHours/24+' giorni':evHours+' ore'}`;
+ $('evTop').innerHTML=r.summary.length?r.summary.map(x=>`<tr data-mac="${esc(x.mac)}" tabindex="0" style="cursor:pointer"><td><b>${esc(x.name||x.mac)}</b></td><td>${x.move_ap}</td><td>${x.move_band}</td><td>${x.disconnect}</td></tr>`).join(''):'<tr><td colspan="4" class="empty">Nessun cambio nel periodo.</td></tr>';
+ $('evList').innerHTML=r.events.length?r.events.map(e=>{const k=KIND[e.kind]||[e.kind,''];return `<tr data-mac="${esc(e.mac)}" tabindex="0" style="cursor:pointer"><td class="mono">${when(e.ts)}</td><td><b>${esc(e.name||e.mac)}</b></td><td><span class="${k[1]}">${esc(k[0])}</span></td><td>${esc(e.src||'—')} → ${esc(e.dst||'—')}</td></tr>`}).join(''):'<tr><td colspan="4" class="empty">Nessun evento nel periodo.</td></tr>'}
 function showHistory(mac){const d=DATA?.devices.find(x=>x.mac===mac);hist.mac=mac;$('historyPanel').hidden=false;$('historyTitle').textContent='Storico segnale · '+(mac==='opal:uplink'?'uplink Opal → AX55':d?.name||mac);syncRanges();$('historyPanel').scrollIntoView({behavior:'smooth',block:'nearest'});loadHistory()}
 function syncRanges(){document.querySelectorAll('#ranges button').forEach(b=>b.setAttribute('aria-pressed',String(+b.dataset.h===hist.hours)))}
 function drawChart(r){const c=$('chart'),ctx=c.getContext('2d'),w=c.clientWidth,h=c.clientHeight,dpr=devicePixelRatio||1,cs=getComputedStyle(document.documentElement),col=n=>cs.getPropertyValue(n).trim();
@@ -154,6 +166,7 @@ function drawChart(r){const c=$('chart'),ctx=c.getContext('2d'),w=c.clientWidth,
  const X=t=>L+(t-t0)/(t1-t0)*(w-L-R),Y=v=>T+(hi-v)/(hi-lo)*(h-T-B);
  ctx.strokeStyle=col('--line');ctx.lineWidth=1;for(let v=Math.ceil(lo/10)*10;v<=hi;v+=10){ctx.beginPath();ctx.moveTo(L,Y(v));ctx.lineTo(w-R,Y(v));ctx.stroke();ctx.fillText(v+' dBm',2,Y(v)+4)}
  for(let i=0;i<=4;i++){const t=t0+(t1-t0)*i/4,d=new Date(t*1000);ctx.textAlign=i===4?'right':i===0?'left':'center';ctx.fillText(r.hours>24?d.toLocaleDateString('it-IT',{day:'numeric',month:'short'})+' '+d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'}):d.toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'}),X(t),h-6)}ctx.textAlign='left';
+ for(const e of hist.events||[]){if(e.ts<t0)continue;const x=X(e.ts);ctx.strokeStyle=e.kind==='disconnect'?col('--red'):e.kind==='connect'?col('--green'):col('--violet');ctx.setLineDash([2,3]);ctx.beginPath();ctx.moveTo(x,T);ctx.lineTo(x,h-B);ctx.stroke()}
  ctx.setLineDash([4,4]);ctx.strokeStyle=col('--amber');ctx.beginPath();ctx.moveTo(L,Y(TH().warn));ctx.lineTo(w-R,Y(TH().warn));ctx.stroke();ctx.setLineDash([]);
  ctx.strokeStyle=col('--blue');ctx.lineWidth=2;ctx.beginPath();let prev=null;
  for(const [t,v] of r.points){prev!==null&&t-prev<=r.bucket*2.5?ctx.lineTo(X(t),Y(v)):ctx.moveTo(X(t),Y(v));prev=t;pts.push({x:X(t),y:Y(v),t,v})}ctx.stroke();
@@ -167,12 +180,14 @@ new ResizeObserver(()=>{if(!$('historyPanel').hidden&&hist.res)drawChart(hist.re
 // eventi (delegati: nessun onclick inline, tutto raggiungibile da tastiera)
 const target=e=>e.target.closest('[data-mac]');
 function activate(e){const r=e.target.closest('.rename');if(r){e.stopPropagation();openRename(r.closest('tr').dataset.mac,r.dataset.name);return}const t=target(e);if(t)showHistory(t.dataset.mac)}
-for(const id of ['topology','rows'])$(id).addEventListener('click',activate);
-for(const id of ['topology','rows'])$(id).addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&!e.target.closest('button')){e.preventDefault();activate(e)}});
+for(const id of ['topology','rows','evTop','evList'])$(id).addEventListener('click',activate);
+for(const id of ['topology','rows','evTop','evList'])$(id).addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&!e.target.closest('button')){e.preventDefault();activate(e)}});
 $('head').addEventListener('click',e=>{const b=e.target.closest('button[data-k]');if(!b)return;sortDir=sortKey===b.dataset.k?-sortDir:1;sortKey=b.dataset.k;drawTable()});
 $('filter').addEventListener('input',drawTable);$('connectionFilter').addEventListener('change',drawTable);
 $('unlabeled').addEventListener('click',()=>{onlyUnlabeled=!onlyUnlabeled;$('unlabeled').setAttribute('aria-pressed',onlyUnlabeled);$('unlabeled').textContent=onlyUnlabeled?'Mostra tutti':'Solo senza label';drawTable()});
 $('ranges').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;hist.hours=+b.dataset.h;syncRanges();loadHistory()});
+$('evPanel').addEventListener('toggle',()=>{if($('evPanel').open)loadEvents()});
+$('evRanges').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;evHours=+b.dataset.h;document.querySelectorAll('#evRanges button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));loadEvents()});
 $('closeHistory').addEventListener('click',()=>$('historyPanel').hidden=true);
 $('refreshBtn').addEventListener('click',refreshNow);
 $('dlgCancel').addEventListener('click',()=>$('dlg').close('cancel'));

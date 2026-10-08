@@ -63,10 +63,13 @@ CFG = dict(
     known_hosts=os.getenv("OPAL_KNOWN_HOSTS") or None,  # when set, host key is verified (RejectPolicy)
     ap_if=_iface(os.getenv("OPAL_AP_IF", os.getenv("OPAL_IFACE", "wlan0"))),
     sta_if=_iface(os.getenv("OPAL_STA_IF", "wlan-sta0")),
-    # Physical LAN ports of the Opal (e.g. "eth0"): MACs seen there by the bridge become "Opal · cavo".
+    extenders=_list("EXTENDER_NAMES", "RE700X"),  # names (may be partial) of OneMesh extenders reported by the AX55
+    bridge=_iface(os.getenv("OPAL_BRIDGE", "br-lan")),
+    uplink_expected=os.getenv("UPLINK_EXPECTED_AP", ""),  # part of expected AP name (e.g. "AX55"); empty = no warning
+    # Opal physical LAN ports (e.g. "eth0.1"): MACs seen there by the bridge become "Opal · wired".
     lan_ifs=[_iface(x) for x in _list("OPAL_LAN_IF")],
     wired_macs=[norm_mac(x) for x in _list("OPAL_WIRED_MACS")],  # manual alternative/addition
-    ax_macs=[norm_mac(x) for x in _list("AX55_MAC")], # "02:00:00:00:00:0f")],
+    ax_macs=[norm_mac(x) for x in _list("AX55_MAC")],
     re_macs=[norm_mac(x) for x in _list("RE700X_MAC")],
     poll=max(10, int(os.getenv("POLL_SECONDS", "30"))),
     names=os.getenv("NAMES_FILE", str(ROOT / "names.json")),
@@ -181,7 +184,8 @@ class OpalLink:
             pass
         self.client = None
 
-    def run(self, command):
+    def run_sections(self, sections):
+        """It executes each command separately within the persistent session and measures its duration."""
         with self.lock:
             self.new_session = False
             for attempt in (1, 2):
@@ -190,8 +194,13 @@ class OpalLink:
                     if not (transport and transport.is_active()):
                         self.close()
                         self.client = self._connect()
-                    _, stdout, _ = self.client.exec_command(command, timeout=15)
-                    return stdout.read().decode(errors="replace")
+                    outputs, timings = {}, {}
+                    for name, command in sections:
+                        t0 = time.perf_counter()
+                        _, stdout, _ = self.client.exec_command(command, timeout=15)
+                        outputs[name] = stdout.read().decode(errors="replace")
+                        timings[name] = time.perf_counter() - t0
+                    return outputs, timings
                 except Exception:
                     self.close()
                     if attempt == 2:
@@ -204,8 +213,13 @@ ASSOC_RX = re.compile(r"^([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+(-?\d+) dBm(?:
 
 def parse_opal(output):
     parts = dict(re.findall(r"##(\w+)\n(.*?)(?=\n##\w+\n|\Z)", output, re.S))
-    neighbors = {norm_mac(m.group(2)): m.group(1) for m in re.finditer(
-        r"^(\d+\.\d+\.\d+\.\d+)\s+dev\s+\S+\s+lladdr\s+([0-9a-fA-F:]{17})", parts.get("NEIGH", ""), re.M)}
+    neighbors, neigh_state = {}, {}
+    for m in re.finditer(r"^(\d+\.\d+\.\d+\.\d+)\s+dev\s+\S+\s+lladdr\s+([0-9a-fA-F:]{17})(.*)$",
+                         parts.get("NEIGH", ""), re.M):
+        mac = norm_mac(m.group(2))
+        neighbors[mac] = m.group(1)
+        state = re.search(r"\b(REACHABLE|STALE|DELAY|PROBE|FAILED|PERMANENT|INCOMPLETE|NOARP)\b", m.group(3))
+        neigh_state[mac] = state.group(1) if state else None
     assoc_text = parts.get("ASSOC", "")
     matches = list(ASSOC_RX.finditer(assoc_text))
     clients = {}
@@ -218,22 +232,37 @@ def parse_opal(output):
                             rx=_g(r"RX:\s*([\d.]+) MBit/s", block, float))
     wired = set(CFG["wired_macs"])
     if CFG["lan_ifs"]:
-        for m in re.finditer(r"^([0-9a-fA-F:]{17}) dev (\S+)(.*)$", parts.get("FDB", ""), re.M):
+        fdb = parts.get("FDB", "")
+        for m in re.finditer(r"^([0-9a-fA-F:]{17}) dev (\S+)(.*)$", fdb, re.M):  # `bridge fdb show` format
             if m.group(2) in CFG["lan_ifs"] and "permanent" not in m.group(3) and "self" not in m.group(3):
                 wired.add(norm_mac(m.group(1)))
+        ports = {int(m.group(1), 0): m.group(2) for m in re.finditer(r"^(0x[0-9a-fA-F]+|\d+) (\S+)$",
+                                                                    parts.get("PORTS", ""), re.M)}
+        for m in re.finditer(r"^\s*(\d+)\s+([0-9a-fA-F:]{17})\s+(yes|no)\b", fdb, re.M):  # `brctl showmacs`
+            if m.group(3) == "no" and ports.get(int(m.group(1))) in CFG["lan_ifs"]:
+                wired.add(norm_mac(m.group(2)))
     return dict(ap=_iw_info(parts.get("AP")), sta=_iw_info(parts.get("STA")), clients=clients,
-                neigh=neighbors, wired=sorted(wired), own_mac=norm_mac(parts.get("MAC", "").strip()))
+                neigh=neighbors, neigh_state=neigh_state, wired=sorted(wired), own_mac=norm_mac(parts.get("MAC", "").strip()))
 
 
 def fetch_opal():
     ap, sta = CFG["ap_if"], CFG["sta_if"]
-    command = (f"echo '##AP'; iwinfo {ap} info; echo '##ASSOC'; iwinfo {ap} assoclist; "
-               f"echo '##STA'; iwinfo {sta} info; echo '##MAC'; cat /sys/class/net/{sta}/address; "
-               "echo '##NEIGH'; ip neigh show; echo '##FDB'; bridge fdb show 2>/dev/null")
-    output = OPAL.run(command)
+    sections = [("AP", f"iwinfo {ap} info"), ("ASSOC", f"iwinfo {ap} assoclist"), ("STA", f"iwinfo {sta} info"),
+                ("MAC", f"cat /sys/class/net/{sta}/address"), ("NEIGH", "ip neigh show")]
+    if CFG["lan_ifs"]:
+        br = CFG["bridge"]
+        sections += [("FDB", f"bridge fdb show 2>/dev/null || brctl showmacs {br} 2>/dev/null"),
+                     ("PORTS", f'for p in /sys/class/net/{br}/brif/*; do echo "$(cat $p/port_no) ${{p##*/}}"; done 2>/dev/null')]
+    outputs, timings = OPAL.run_sections(sections)
+    output = "".join(f"##{name}\n{outputs[name].rstrip()}\n" for name, _ in sections)
     parsed = parse_opal(output)
+    log.debug("Opal · time per command: %s", ", ".join(f"{n} {t:.2f} s" for n, t in timings.items()))
+    ranked = sorted(timings.items(), key=lambda kv: -kv[1])
+    slow = [f"{n} {t:.2f} s" for n, t in (ranked[:2] if sum(timings.values()) >= 2 else
+                                           [kv for kv in ranked if kv[1] >= 1])]
     parsed["meta"] = dict(detail=f"{len(parsed['clients'])} Wi-Fi clients, {len(parsed['wired'])} wired · "
-                                 f"SSH {'new' if OPAL.new_session else 'reused'} · {len(output)} B")
+                                 f"SSH {'new' if OPAL.new_session else 'reused'} · {len(output)} B"
+                                 + (f" · slow: {', '.join(slow)}" if slow else ""))
     return parsed
 
 
@@ -339,12 +368,23 @@ def write_names(names):
 
 # ───────────────────────────── Map building ─────────────────────────────
 
+def node_of(d):
+    """Network node the device is attached to: Opal, an OneMesh extender, or the AX55."""
+    if d["group"] in ("opal", "opal_wired"):
+        return "Opal"
+    name = (d["ap_name"] or "").lower()
+    for hint in CFG["extenders"]:
+        if hint.lower() in name:
+            return hint
+    return "AX55"
+
+
 def build(router, opal, names):
     table = {}
 
     def row(mac):
         return table.setdefault(mac, dict(mac=mac, name=None, ip=None, group="unknown", rssi=None, tx=None,
-                                          rx=None, connected=False, ap_name="", ssid="", connection=""))
+                                          rx=None, connected=False, ap_name="", ssid="", connection="", arp=None))
 
     for dev in router["devices"]:
         item = row(dev["mac"])
@@ -352,7 +392,7 @@ def build(router, opal, names):
         if dev["active"]:
             item.update(group=GROUP.get(dev["conn"], "unknown"), rssi=dev["signal"], tx=dev["tx"], rx=dev["rx"],
                         connected=True, ssid=dev["ssid"], ap_name=dev["ap_name"], connection=dev["connection_label"])
-    own = None
+    own, opal_view = None, None
     if opal:
         own, essid = opal["own_mac"], opal["ap"].get("essid") or ""
         for mac, client in opal["clients"].items():
@@ -367,12 +407,14 @@ def build(router, opal, names):
             item = row(mac)
             item.update(group="opal_wired", rssi=None, tx=None, rx=None, connected=True, ssid="",
                         ap_name="GL.iNet Opal", connection="RJ45", ip=item["ip"] or opal["neigh"].get(mac))
-        table.pop(own, None)  # the Opal itself is not a client
+        opal_view = table.pop(own, None)  # the Opal itself is not a client (but the router knows which AP it's attached to)
     for mac, item in table.items():
         source = item["name"]
         item["labeled"] = bool(names.get(mac) or (source and norm_mac(source) != mac))
         item["name"] = names.get(mac) or source or "?"
         item["ap"], item["band"] = LABEL[item["group"]], BAND.get(item["group"], "—")
+        item["node"] = node_of(item)
+        item["arp"] = (opal or {}).get("neigh_state", {}).get(mac)  # ARP state seen by the Opal(REACHABLE, STALE…)
 
     devices = sorted(table.values(), key=lambda d: (not d["connected"], d["ap"], d["name"].lower()))
     live = [d for d in devices if d["connected"]]
@@ -392,13 +434,19 @@ def build(router, opal, names):
     if opal:
         sta = opal["sta"]
         bssid = (sta.get("bssid") or "").lower()
+        via = ((opal_view or {}).get("ap_name") or "").strip() if opal_view and opal_view["connected"] else ""
         uplink = "unknown"
-        if bssid:
-            mid = bssid[3:14]  # middle octets: the first/last differ between SSIDs/bands of the same router
+        if via:  # most reliable source: what the AX55/OneMesh reports for the Opal wlan-sta0 MAC
+            uplink = via
+            if CFG["uplink_expected"] and CFG["uplink_expected"].lower() not in via.lower():
+                alerts.append(dict(level="warn", text=f"The Opal is connected to «{via}» instead of "
+                                                      f"«{CFG['uplink_expected']}»"))
+        elif bssid and bssid != own:  # if BSSID matches the Opal MAC the driver doesn't really report it
+            mid = bssid[3:14]
             uplink = ("AX55" if any(m[3:14] == mid for m in CFG["ax_macs"]) else
                       "RE700X" if any(m[3:14] == mid for m in CFG["re_macs"]) else "other AP")
-        if uplink in ("RE700X", "other AP"):
-            alerts.append(dict(level="warn", text=f"The Opal is connected to {bssid} ({uplink}), not to the AX55"))
+            if uplink in ("RE700X", "other AP"):
+                alerts.append(dict(level="warn", text=f"The Opal is connected to {bssid} ({uplink}), not to the AX55"))
         if sta.get("signal") is not None and sta["signal"] <= CFG["uplink_warn"]:
             alerts.append(dict(level="warn", text=f"Opal uplink signal weak ({sta['signal']} dBm)"))
         snr = sta["signal"] - sta["noise"] if sta.get("signal") is not None and sta.get("noise") is not None else None
@@ -427,6 +475,9 @@ def init_db():
             ts REAL, mac TEXT, ip TEXT, name TEXT, ap TEXT, band TEXT, ssid TEXT, rssi REAL, tx REAL, rx REAL)""")
         db.execute("CREATE INDEX IF NOT EXISTS ix_samples_mac_ts ON samples(mac, ts)")
         db.execute("CREATE INDEX IF NOT EXISTS ix_samples_ts ON samples(ts)")
+        db.execute("CREATE TABLE IF NOT EXISTS events(ts REAL, mac TEXT, name TEXT, kind TEXT, src TEXT, dst TEXT)")
+        db.execute("CREATE INDEX IF NOT EXISTS ix_events_ts ON events(ts)")
+        db.execute("CREATE INDEX IF NOT EXISTS ix_events_mac_ts ON events(mac, ts)")
         db.execute("CREATE TABLE IF NOT EXISTS seen(mac TEXT PRIMARY KEY, first_seen REAL, last_seen REAL)")
 
 
@@ -473,8 +524,9 @@ def db_stats():
 
 def prune():
     with dbx() as db:
-        deleted = db.execute("DELETE FROM samples WHERE ts < ?",
-                             (time.time() - CFG["retention_days"] * 86400,)).rowcount
+        limit = time.time() - CFG["retention_days"] * 86400
+        deleted = db.execute("DELETE FROM samples WHERE ts < ?", (limit,)).rowcount
+        db.execute("DELETE FROM events WHERE ts < ?", (limit,))
     if deleted > 100_000:  # after a major cleanup, it frees up disk space
         con = sqlite3.connect(CFG["db"], timeout=60)
         try:
@@ -521,34 +573,58 @@ def _take(future, key, errors, stale):
     return value
 
 
-def _names(*datas):
-    out = {}
-    for data in datas:
-        out.update({d["mac"]: d["name"] for d in (data or {}).get("devices", [])})
-    return out
+def _where(d):
+    return f"{d['node']} · {d['ap'].split(' · ', 1)[-1]}"  # e.g. "AX55 · 5 GHz", "Opal · 2.4 GHz", "RE700X · 5 GHz"
 
 
-def log_changes(prev, data):
-    """Records events: connections/disconnections, moves between access points, and uplink changes."""
-    if not prev:
-        return
-    names = _names(prev, data)
+def detect_events(prev, data, now):
+    """Compare two consecutive cycles. Only if both sources were healthy: otherwise they'd be false events."""
+    if not (prev and prev.get("clean") and data.get("clean")):
+        return []
     before = {d["mac"]: d for d in prev["devices"] if d["connected"]}
     after = {d["mac"]: d for d in data["devices"] if d["connected"]}
+    events = []
+    for mac, d in after.items():
+        old = before.get(mac)
+        if old is None:
+            events.append((now, mac, d["name"], "connect", None, _where(d)))
+        elif old["node"] != d["node"]:
+            events.append((now, mac, d["name"], "move_ap", _where(old), _where(d)))
+        elif old["group"] != d["group"]:
+            events.append((now, mac, d["name"], "move_band", _where(old), _where(d)))
+    for mac, old in before.items():
+        if mac not in after:
+            events.append((now, mac, old["name"], "disconnect", _where(old), None))
+    return events
 
-    def fmt(macs):
-        items = [names.get(m, m) for m in sorted(macs)]
-        return ", ".join(items[:8]) + (f" (+{len(items) - 8} others)" if len(items) > 8 else "")
 
-    joined, left = after.keys() - before.keys(), before.keys() - after.keys()
+def save_events(events):
+    with dbx() as db:
+        db.executemany("INSERT INTO events VALUES(?,?,?,?,?,?)", events)
+
+
+def log_changes(prev, data, events):
+    """Records events: connections/disconnections, moves between access points, and uplink changes."""
+    if not (prev and prev.get("clean") and data.get("clean")):
+        return
+
+    def fmt(items):
+        names = [e[2] or e[1] for e in items]
+        return ", ".join(names[:8]) + (f" (+{len(names) - 8} others)" if len(names) > 8 else "")
+
+    joined, left = [e for e in events if e[3] == "connect"], [e for e in events if e[3] == "disconnect"]
     if joined or left:
         log.info("Devices · connected: %s · disconnected: %s", fmt(joined) or "—", fmt(left) or "—")
-    for mac in before.keys() & after.keys():
-        if before[mac]["ap"] != after[mac]["ap"]:
-            log.info("Move: %s from «%s» to «%s»", names[mac], before[mac]["ap"], after[mac]["ap"])
+    for e in events:
+        if e[3] in ("move_ap", "move_band"):
+            log.info("%s: %s from «%s» to «%s»", "AP change" if e[3] == "move_ap" else "Band/network change",
+                     e[2] or e[1], e[4], e[5])
     old, new = (prev.get("opal") or {}).get("sta", {}), (data.get("opal") or {}).get("sta", {})
-    if old.get("bssid") and new.get("bssid") and old["bssid"] != new["bssid"]:
-        log.warning("Opal uplink changed: %s → %s (%s)", old["bssid"], new["bssid"], data["opal"]["uplink"])
+    old_up, new_up = (prev.get("opal") or {}).get("uplink"), (data.get("opal") or {}).get("uplink")
+    if old_up and new_up and old_up != new_up:
+        log.warning("Opal uplink changed: %s → %s", old_up, new_up)
+    elif old.get("bssid") and new.get("bssid") and old["bssid"] != new["bssid"]:
+        log.warning("Opal uplink BSSID changed: %s → %s", old["bssid"], new["bssid"])
 
 
 def _source_summary(key, name):
@@ -569,9 +645,11 @@ def collect():
     now = round(time.time(), 3)
     data = build(router or dict(fw=None, devices=[]), opal, read_names())
     data["stale"] = stale
+    data["clean"] = router is not None and opal is not None and not stale  # freshness
+    events = detect_events(STATE["data"], data, now)
     saved, db = 0, HEALTH["db"]
     db["last_try"] = now
-    for step in (track_seen, save_history):
+    for step in (track_seen, save_history, *([lambda _d, _n: save_events(events)] if events else [])):
         try:
             result = step(data, now)
             saved = result if step is save_history else saved
@@ -583,7 +661,7 @@ def collect():
                 log.warning("Database: ERROR · %s", message)
     if "database" not in errors:
         db.update(ok=True, last_ok=now, fails=0, last_error=None)
-    log_changes(STATE["data"], data)
+    log_changes(STATE["data"], data, events)
     live = sum(d["connected"] for d in data["devices"])
     with COND:
         META["seq"] += 1
@@ -604,6 +682,7 @@ def poll_loop():
         log.error("Database cannot be initialized: %s", exc)
     last_prune = 0
     while True:
+        cycle_start = time.monotonic()
         try:
             collect()
             if time.time() - last_prune > 3600:
@@ -612,7 +691,7 @@ def poll_loop():
         except Exception as exc:
             STATE = dict(STATE, errors={"collector": f"{type(exc).__name__}: {exc}"})
             log.exception("Unexpected error during the collection cycle")
-        WAKE.wait(CFG["poll"])
+        WAKE.wait(max(1.0, CFG["poll"] - (time.monotonic() - cycle_start)))  # fixed cadence, not poll + duration
         WAKE.clear()
 
 
@@ -671,6 +750,31 @@ def api_health():
                    cycles=state["health"]["cycle"]), (200 if ok else 503)
 
 
+@app.get("/api/events")
+def api_events():
+    """AP/band changes, connections, and disconnections. ?mac= filters a device, ?hours= sets the time range."""
+    try:
+        hours = min(CFG["retention_days"] * 24, max(1, int(request.args.get("hours", "24"))))
+    except ValueError:
+        hours = 24
+    mac = norm_mac(request.args["mac"]) if request.args.get("mac") else None
+    since = time.time() - hours * 3600
+    with dbx() as db:
+        sql, args = "SELECT ts,mac,name,kind,src,dst FROM events WHERE ts>=?", [since]
+        if mac:
+            sql, args = sql + " AND mac=?", args + [mac]
+        rows = db.execute(sql + " ORDER BY ts DESC LIMIT 300", args).fetchall()
+        totals = dict(db.execute("SELECT kind, COUNT(*) FROM events WHERE ts>=? GROUP BY kind", (since,)).fetchall())
+        summary = [] if mac else db.execute(
+            "SELECT mac, MAX(name), SUM(kind='move_ap'), SUM(kind='move_band'), SUM(kind='disconnect') FROM events "
+            "WHERE ts>=? GROUP BY mac HAVING SUM(kind!='connect')>0 "
+            "ORDER BY SUM(kind IN ('move_ap','move_band')) DESC, SUM(kind='disconnect') DESC LIMIT 10",
+            (since,)).fetchall()
+    return jsonify(hours=hours, totals=totals,
+                   events=[dict(ts=r[0], mac=r[1], name=r[2], kind=r[3], src=r[4], dst=r[5]) for r in rows],
+                   summary=[dict(mac=r[0], name=r[1], move_ap=r[2], move_band=r[3], disconnect=r[4]) for r in summary])
+
+
 @app.post("/api/refresh")
 def api_refresh():
     """It forces a cycle and responds as soon as new data is ready."""
@@ -722,4 +826,4 @@ if not os.getenv("DASH_NO_WORKER"):
     start_worker()
 
 if __name__ == "__main__":
-    app.run(host=os.getenv("HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8080")), threaded=True)
+    app.run(host=os.getenv("HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8089")), threaded=True)
