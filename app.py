@@ -55,7 +55,7 @@ def _iface(value):
 
 
 CFG = dict(
-    opal_host=os.getenv("OPAL_HOST", "192.0.2.2"),
+    opal_host=os.getenv("OPAL_HOST", ""),  # empty = Opal/OpenWrt disabled (primary router only)
     opal_port=int(os.getenv("OPAL_PORT", "22")),
     opal_user=os.getenv("OPAL_USER", "root"),
     opal_pass=os.getenv("OPAL_PASSWORD", os.getenv("OPAL_PASS", "")) or None,
@@ -63,7 +63,7 @@ CFG = dict(
     known_hosts=os.getenv("OPAL_KNOWN_HOSTS") or None,  # when set, host key is verified (RejectPolicy)
     ap_if=_iface(os.getenv("OPAL_AP_IF", os.getenv("OPAL_IFACE", "wlan0"))),
     sta_if=_iface(os.getenv("OPAL_STA_IF", "wlan-sta0")),
-    extenders=_list("EXTENDER_NAMES", "RE700X"),  # names (may be partial) of OneMesh extenders reported by the AX55
+    extenders=_list("EXTENDER_NAMES"),  # names (may be partial) of OneMesh extenders reported by the AX55
     bridge=_iface(os.getenv("OPAL_BRIDGE", "br-lan")),
     uplink_expected=os.getenv("UPLINK_EXPECTED_AP", ""),  # part of expected AP name (e.g. "AX55"); empty = no warning
     # Opal physical LAN ports (e.g. "eth0.1"): MACs seen there by the bridge become "Opal · wired".
@@ -73,12 +73,15 @@ CFG = dict(
     re_macs=[norm_mac(x) for x in _list("RE700X_MAC")],
     poll=max(10, int(os.getenv("POLL_SECONDS", "30"))),
     names=os.getenv("NAMES_FILE", str(ROOT / "names.json")),
+    meta=os.getenv("META_FILE", str(ROOT / "meta.json")),  # type and room per device
     db=os.getenv("DB_PATH", str(ROOT / "network.db")),
     retention_days=max(1, int(os.getenv("RETENTION_DAYS", "14"))),
     rssi_good=int(os.getenv("RSSI_GOOD", "-60")),
     rssi_warn=int(os.getenv("RSSI_WARN", "-75")),
     uplink_warn=int(os.getenv("UPLINK_WARN", "-70")),
     new_hours=int(os.getenv("NEW_DEVICE_HOURS", "48")),
+    offline_types=_list("OFFLINE_ALERT_TYPES", "camera,rete"),  # types to alert on when they stay offline (empty = never)
+    offline_minutes=int(os.getenv("OFFLINE_ALERT_MINUTES", "10")),
     ha_url=os.getenv("HA_URL", "").rstrip("/"),
     ha_token=os.getenv("HA_TOKEN", ""),
     ha_verify=os.getenv("HA_VERIFY_SSL", "true").lower() not in ("0", "false", "no", "off"),
@@ -94,6 +97,35 @@ LABEL = {"wired": "AX55 · cavo", "w5": "AX55 · 5 GHz", "w2": "AX55 · 2.4 GHz"
          "unknown": "non determinato"}
 BAND = {"wired": "RJ45", "opal_wired": "RJ45", "w5": "5 GHz", "w2": "2.4 GHz", "iot": "2.4 GHz",
         "guest": "2.4 GHz", "opal": "2.4 GHz"}
+TYPES = {"pc": "PC / laptop", "server": "Server / VM / LXC", "smartphone": "Smartphone / tablet",
+         "tv": "TV / audio / media", "camera": "Telecamera / campanello", "luce_presa": "IoT · luci / prese / relè",
+         "iot": "IoT · altro", "rete": "Rete (router / AP)", "altro": "Altro"}
+OUI_KIND = {"bc:24:11": "server"}  # Proxmox virtual MACs (VM and LXC)
+KIND_HINTS = [  # in priority order; words <4 chars only if an exact "chunk" of the name
+    ("camera", "cam camera telecamera reolink rlc doorbell campanello citofono ring spioncino webcam"),
+    ("rete", "archer ax55 re700 opal router extender repeater mesh accesspoint"),
+    ("server", "proxmox pve lxc vm nas server homeassistant assistant raspberrypi raspberry"),
+    ("luce_presa", "shelly plug presa luce luci lampada lamp bulb tasmota sonoff hue relay dimmer tapo kasa wled"),
+    ("smartphone", "iphone ipad pixel galaxy smartphone phone tablet android oneplus redmi poco"),
+    ("pc", "pc laptop notebook desktop macbook imac workstation thinkpad"),
+    ("tv", "tv chromecast firetv roku appletv echo alexa amazon sonos soundbar speaker bravia webos tizen"),
+    ("iot", "philips broadlink sensor sensore thermostat termostato purifier purificatore conditioner "
+            "climatizzatore robot roomba aspirapolvere stampante printer esp zigbee"),
+]
+
+
+def suggest_kind(mac, *texts):
+    """Likely type from MAC (known OUI) or from words in the name. Only a suggestion: the last word is yours."""
+    if mac[:8] in OUI_KIND:
+        return OUI_KIND[mac[:8]]
+    tokens = re.findall(r"[a-z0-9]+", " ".join(t for t in texts if t).lower())
+    for kind, words in KIND_HINTS:
+        for word in words.split():
+            if any(t == word if len(word) < 4 else t.startswith(word) for t in tokens):
+                return kind
+    return None
+
+
 UPLINK_ID = "opal:uplink"  # pseudo-MAC by which the uplink signal is historicized
 
 # ───────────────────────────── Log and diagnostics ─────────────────────────────
@@ -132,8 +164,11 @@ STATE = {"ts": None, "errors": {}, "data": None, "health": None}  # replaced in 
 META = {"seq": 0}
 COND = threading.Condition()
 WAKE = threading.Event()
+ALIAS_LOGGED = set()
+OFFLINE_ALERTED = set()
 LAST = {}  # latest valid result for source: {"router": (ts, data), "opal": (ts, data)}
 NAMES_LOCK = threading.Lock()
+META_LOCK = threading.Lock()
 _started = False
 
 
@@ -241,14 +276,18 @@ def parse_opal(output):
         for m in re.finditer(r"^\s*(\d+)\s+([0-9a-fA-F:]{17})\s+(yes|no)\b", fdb, re.M):  # `brctl showmacs`
             if m.group(3) == "no" and ports.get(int(m.group(1))) in CFG["lan_ifs"]:
                 wired.add(norm_mac(m.group(2)))
-    return dict(ap=_iw_info(parts.get("AP")), sta=_iw_info(parts.get("STA")), clients=clients,
-                neigh=neighbors, neigh_state=neigh_state, wired=sorted(wired), own_mac=norm_mac(parts.get("MAC", "").strip()))
+    ap_info, own = _iw_info(parts.get("AP")), norm_mac(parts.get("MAC", "").strip())
+    local = {norm_mac(m) for m in re.findall(r"[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}", parts.get("LOCAL", ""))}
+    local |= {own, norm_mac(ap_info.get("bssid") or "")}
+    local -= {"00:00:00:00:00:00", ""}
+    return dict(ap=ap_info, sta=_iw_info(parts.get("STA")), clients=clients, local_macs=sorted(local),
+                neigh=neighbors, neigh_state=neigh_state, wired=sorted(wired), own_mac=own)
 
 
 def fetch_opal():
     ap, sta = CFG["ap_if"], CFG["sta_if"]
     sections = [("AP", f"iwinfo {ap} info"), ("ASSOC", f"iwinfo {ap} assoclist"), ("STA", f"iwinfo {sta} info"),
-                ("MAC", f"cat /sys/class/net/{sta}/address"), ("NEIGH", "ip neigh show")]
+                ("MAC", f"cat /sys/class/net/{sta}/address"), ("NEIGH", "ip neigh show; echo; echo '##LOCAL'; cat /sys/class/net/*/address 2>/dev/null")]
     if CFG["lan_ifs"]:
         br = CFG["bridge"]
         sections += [("FDB", f"bridge fdb show 2>/dev/null || brctl showmacs {br} 2>/dev/null"),
@@ -311,7 +350,7 @@ def _ha_trackers():
             return json.loads(r.text), "template", len(r.content), None
         except (ValueError, requests.HTTPError) as exc:
             _template_ok = False  # template not supported/valid: falling back to /api/states
-            log.warning("Home Assistant: template cannot be used (%s), falling back to /api/states", exc)
+            log.warning("Home Assistant: template unusable (%s), falling back to /api/states", exc)
     r = HA.get(f"{CFG['ha_url']}/api/states", headers=headers, timeout=12, verify=CFG["ha_verify"])
     r.raise_for_status()
     states = r.json()
@@ -345,25 +384,58 @@ def fetch_home_assistant():
     return dict(fw="TP-Link AX55 · data from Home Assistant", devices=devices, meta=dict(detail=detail))
 
 
-# ───────────────────────────── Names/labels ─────────────────────────────
+# ───────────────────────────── Names / labels ───────────────────────────
+
+_GOOD = {}           # the last valid content of each JSON file
+CONFIG_ERRORS = {}   # file → error, shown on the page
+
+
+def _read_map(path, strict=False):
+    name = Path(path).name
+    try:
+        with open(path, encoding="utf-8") as file:
+            raw = json.load(file)
+        if not isinstance(raw, dict):
+            raise ValueError("must be a JSON object {mac: …}")
+        data = {norm_mac(k): v for k, v in raw.items()}
+    except FileNotFoundError:
+        _GOOD.pop(path, None)
+        CONFIG_ERRORS.pop(name, None)
+        return {}
+    except (OSError, ValueError) as exc:
+        if strict:
+            raise  # Whoever rewrites the file must never start from broken content.
+        message = f"{type(exc).__name__}: {exc}"
+        if CONFIG_ERRORS.get(name) != message:
+            log.warning("%s is unreadable (%s): using the last valid version", name, message)
+        CONFIG_ERRORS[name] = message
+        return dict(_GOOD.get(path, {}))
+    CONFIG_ERRORS.pop(name, None)
+    _GOOD[path] = data
+    return dict(data)
+
+
+def _write_map(path, data):
+    target = Path(path)
+    tmp = target.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    os.replace(tmp, target)  # atomic write
+
 
 def read_names(strict=False):
-    try:
-        with open(CFG["names"], encoding="utf-8") as file:
-            return {norm_mac(k): v for k, v in json.load(file).items()}
-    except FileNotFoundError:
-        return {}
-    except (OSError, ValueError):
-        if strict:
-            raise
-        return {}
+    return _read_map(CFG["names"], strict)
 
 
 def write_names(names):
-    path = Path(CFG["names"])
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(names, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-    os.replace(tmp, path)  # atomic write
+    _write_map(CFG["names"], names)
+
+
+def read_meta(strict=False):
+    return _read_map(CFG["meta"], strict)
+
+
+def write_meta(meta):
+    _write_map(CFG["meta"], meta)
 
 
 # ───────────────────────────── Map building ─────────────────────────────
@@ -379,12 +451,12 @@ def node_of(d):
     return "AX55"
 
 
-def build(router, opal, names):
+def build(router, opal, names, meta=None):
     table = {}
 
     def row(mac):
         return table.setdefault(mac, dict(mac=mac, name=None, ip=None, group="unknown", rssi=None, tx=None,
-                                          rx=None, connected=False, ap_name="", ssid="", connection="", arp=None))
+                                          rx=None, connected=False, ap_name="", ssid="", connection="", arp=None, alias=False, via=""))
 
     for dev in router["devices"]:
         item = row(dev["mac"])
@@ -392,7 +464,7 @@ def build(router, opal, names):
         if dev["active"]:
             item.update(group=GROUP.get(dev["conn"], "unknown"), rssi=dev["signal"], tx=dev["tx"], rx=dev["rx"],
                         connected=True, ssid=dev["ssid"], ap_name=dev["ap_name"], connection=dev["connection_label"])
-    own, opal_view = None, None
+    own, opal_view, aliases = None, None, []
     if opal:
         own, essid = opal["own_mac"], opal["ap"].get("essid") or ""
         for mac, client in opal["clients"].items():
@@ -408,13 +480,40 @@ def build(router, opal, names):
             item.update(group="opal_wired", rssi=None, tx=None, rx=None, connected=True, ssid="",
                         ap_name="GL.iNet Opal", connection="RJ45", ip=item["ip"] or opal["neigh"].get(mac))
         opal_view = table.pop(own, None)  # the Opal itself is not a client (but the router knows which AP it's attached to)
+        # Alias: behind the Opal the AX55 may see devices with the Opal's MAC (station without 4addr).
+        # Priority: Opal assoclist/wired > alias seen through AX55 > AX55 state (may show "absent").
+        by_ip = {}
+        for mac, ip in opal["neigh"].items():
+            if mac not in opal.get("local_macs", ()):
+                by_ip.setdefault(ip, mac)
+        for mac in [m for m in table if m in opal.get("local_macs", ())]:
+            entry = table.pop(mac)
+            real = by_ip.get(entry["ip"] or "")
+            if not real:
+                continue
+            item = row(real)
+            item["alias"] = True
+            promoted = not item["connected"] and entry["connected"]
+            if promoted:
+                item.update(group="opal_wired", connected=True, rssi=None, tx=None, rx=None, ssid="",
+                            ap_name="GL.iNet Opal", connection="behind the Opal", via="behind the Opal",
+                            ip=item["ip"] or entry["ip"], name=item["name"] or entry["name"])
+            aliases.append(dict(real=real, via=mac, ip=entry["ip"], name=item["name"] or entry["name"],
+                                promoted=promoted))
     for mac, item in table.items():
         source = item["name"]
-        item["labeled"] = bool(names.get(mac) or (source and norm_mac(source) != mac))
+        item["named"] = bool(names.get(mac))  # name chosen by the user (names.json)
+        item["labeled"] = bool(item["named"] or (source and norm_mac(source) != mac))
         item["name"] = names.get(mac) or source or "?"
         item["ap"], item["band"] = LABEL[item["group"]], BAND.get(item["group"], "—")
         item["node"] = node_of(item)
         item["arp"] = (opal or {}).get("neigh_state", {}).get(mac)  # ARP state seen by the Opal(REACHABLE, STALE…)
+        info = (meta or {}).get(mac)
+        info = info if isinstance(info, dict) else {}
+        explicit = info.get("type") if info.get("type") in TYPES else None
+        suggested = None if explicit else suggest_kind(mac, item["name"], source)
+        item["kind"], item["kind_auto"] = explicit or suggested, bool(suggested)
+        item["room"] = str(info.get("room") or "")
 
     devices = sorted(table.values(), key=lambda d: (not d["connected"], d["ap"], d["name"].lower()))
     live = [d for d in devices if d["connected"]]
@@ -424,11 +523,20 @@ def build(router, opal, names):
             by_ip.setdefault(d["ip"], []).append(d["name"])
     for ip, owners in by_ip.items():
         if len(owners) > 1:
-            alerts.append(dict(level="bad", text=f"IP conflict {ip}: {', '.join(owners)}"))
+            alerts.append(dict(level="bad", kind="conflict", text=f"IP conflict {ip}: {', '.join(owners)}"))
+    weak = {}
     for d in live:
         if d["rssi"] is not None and d["rssi"] <= CFG["rssi_warn"]:
-            where = "Opal" if d["group"] == "opal" else "AX55"
-            alerts.append(dict(level="warn", text=f"{d['name']} has a weak signal on {where} ({d['rssi']} dBm)"))
+            weak.setdefault((d["room"], d["node"]), []).append(d)
+    for (room, where), items in weak.items():
+        if room and len(items) >= 2:  # multiple weak devices in the same room: single warning, likely a coverage issue
+            detail = ", ".join(f"{d['name']} ({d['rssi']} dBm)" for d in items)
+            alerts.append(dict(level="warn", kind="weak", room=room, text=f"Weak signal in {room} on {where}: {detail}"))
+        else:
+            for d in items:
+                place = f" · {d['room']}" if d["room"] else ""
+                alerts.append(dict(level="warn", kind="weak", mac=d["mac"], room=d["room"],
+                                   text=f"{d['name']}{place} has a weak signal on {where} ({d['rssi']} dBm)"))
 
     opal_out = None
     if opal:
@@ -439,20 +547,21 @@ def build(router, opal, names):
         if via:  # most reliable source: what the AX55/OneMesh reports for the Opal wlan-sta0 MAC
             uplink = via
             if CFG["uplink_expected"] and CFG["uplink_expected"].lower() not in via.lower():
-                alerts.append(dict(level="warn", text=f"The Opal is connected to «{via}» instead of "
-                                                      f"«{CFG['uplink_expected']}»"))
+                alerts.append(dict(level="warn", kind="uplink", text=f"The Opal is connected to «{via}» instead of "
+                                                                    f"«{CFG['uplink_expected']}»"))
         elif bssid and bssid != own:  # if BSSID matches the Opal MAC the driver doesn't really report it
             mid = bssid[3:14]
             uplink = ("AX55" if any(m[3:14] == mid for m in CFG["ax_macs"]) else
                       "RE700X" if any(m[3:14] == mid for m in CFG["re_macs"]) else "other AP")
             if uplink in ("RE700X", "other AP"):
-                alerts.append(dict(level="warn", text=f"The Opal is connected to {bssid} ({uplink}), not to the AX55"))
+                alerts.append(dict(level="warn", kind="uplink",
+                                   text=f"The Opal is connected to {bssid} ({uplink}), not the primary router"))
         if sta.get("signal") is not None and sta["signal"] <= CFG["uplink_warn"]:
-            alerts.append(dict(level="warn", text=f"Opal uplink signal weak ({sta['signal']} dBm)"))
+            alerts.append(dict(level="warn", kind="uplink", text=f"Opal uplink signal weak ({sta['signal']} dBm)"))
         snr = sta["signal"] - sta["noise"] if sta.get("signal") is not None and sta.get("noise") is not None else None
         opal_out = dict(ap=opal["ap"], sta=sta, uplink=uplink, own_mac=own, snr=snr)
     return dict(router=dict(fw=router.get("fw")), opal=opal_out, devices=devices, alerts=alerts,
-                thresholds=dict(good=CFG["rssi_good"], warn=CFG["rssi_warn"]))
+                thresholds=dict(good=CFG["rssi_good"], warn=CFG["rssi_warn"]), aliases=aliases, types=TYPES)
 
 
 # ───────────────────────────── History (SQLite) ─────────────────────────────
@@ -506,12 +615,40 @@ def track_seen(data, now):
                     first = 0 if baseline else now
                 last = now
                 upserts.append((d["mac"], first, last))
-                if first and now - first < CFG["new_hours"] * 3600 and not d["labeled"]:
-                    data["alerts"].append(dict(level="info", text=f"New device on the network: "
-                                                                  f"{d['name']} ({d['ip'] or d['mac']})"))
+                if first and now - first < CFG["new_hours"] * 3600 and not d["named"]:
+                    guess = f"probably {TYPES[d['kind']]}" if d["kind"] else "unknown type"
+                    data["alerts"].append(dict(level="info" if d["kind"] else "warn", kind="new", mac=d["mac"],
+                                               text=f"New device on the network: {d['name']} "
+                                                    f"({d['ip'] or d['mac']}) · {guess}"))
             d["last_seen"] = last
         db.executemany("INSERT INTO seen VALUES(?,?,?) ON CONFLICT(mac) DO UPDATE SET last_seen=excluded.last_seen",
                        upserts)
+    offline_alerts(data, now)
+
+
+def _duration(minutes):
+    return f"{minutes} min" if minutes < 120 else f"{minutes // 60} h" if minutes < 2880 else f"{minutes // 1440} d"
+
+
+def offline_alerts(data, now):
+    """Notifies you if a device of a "critical" type (default: cameras and network) remains offline."""
+    current = set()
+    if data.get("clean") and CFG["offline_types"]:  # with a faulty source, they would all appear to be offline
+        for d in data["devices"]:
+            if d["connected"] or d["kind"] not in CFG["offline_types"] or not d.get("last_seen"):
+                continue
+            minutes = int((now - d["last_seen"]) / 60)
+            if minutes >= CFG["offline_minutes"]:
+                place = f" · {d['room']}" if d["room"] else ""
+                current.add(d["mac"])
+                data["alerts"].append(dict(level="bad" if d["kind"] == "rete" else "warn", kind="offline",
+                                           mac=d["mac"], room=d["room"],
+                                           text=f"{d['name']}{place} has been offline for {_duration(minutes)} "
+                                                f"({TYPES[d['kind']]})"))
+                if d["mac"] not in OFFLINE_ALERTED:
+                    log.warning("Offline: %s%s for %s (%s)", d["name"], place, _duration(minutes), TYPES[d["kind"]])
+    OFFLINE_ALERTED.intersection_update(current)
+    OFFLINE_ALERTED.update(current)
 
 
 def db_stats():
@@ -629,6 +766,8 @@ def log_changes(prev, data, events):
 
 def _source_summary(key, name):
     h = HEALTH[key]
+    if h["ok"] is None:
+        return f"{name} disabled"
     if h["ok"]:
         return f"{name} ok {h['duration']:.2f} s" + (f" ({h['detail']})" if h["detail"] else "")
     return f"{name} ERROR" + (f" after {h['duration']:.1f} s" if h["duration"] is not None else "")
@@ -639,13 +778,24 @@ def collect():
     started = time.perf_counter()
     errors, stale = {}, {}
     with ThreadPoolExecutor(2) as pool:
-        f_router, f_opal = pool.submit(_timed, fetch_home_assistant), pool.submit(_timed, fetch_opal)
+        opal_on = bool(CFG["opal_host"])
+        f_router = pool.submit(_timed, fetch_home_assistant)
+        f_opal = pool.submit(_timed, fetch_opal) if opal_on else None
         router = _take(f_router, "router", errors, stale)
-        opal = _take(f_opal, "opal", errors, stale)
+        opal = _take(f_opal, "opal", errors, stale) if f_opal else None
+        if not opal_on:
+            HEALTH["opal"].update(ok=None, detail="disabled (OPAL_HOST not set)")
     now = round(time.time(), 3)
-    data = build(router or dict(fw=None, devices=[]), opal, read_names())
+    data = build(router or dict(fw=None, devices=[]), opal, read_names(), read_meta())
+    errors.update(CONFIG_ERRORS)
     data["stale"] = stale
-    data["clean"] = router is not None and opal is not None and not stale  # freshness
+    data["clean"] = router is not None and (opal is not None or not opal_on) and not stale  # fresh sources
+    for a in data["aliases"]:
+        key = (a["real"], a["via"], a["promoted"])
+        if key not in ALIAS_LOGGED:
+            ALIAS_LOGGED.add(key)
+            log.info("Alias AX55↔Opal: %s (%s) seen through AX55 with the Opal MAC %s%s", a["name"] or a["real"],
+                     a["ip"], a["via"], " → treated as ONLINE behind the Opal" if a["promoted"] else "")
     events = detect_events(STATE["data"], data, now)
     saved, db = 0, HEALTH["db"]
     db["last_try"] = now
@@ -700,10 +850,10 @@ def start_worker():
     if not _started:
         _started = True
         setup_logging()
-        log.info("Start · every %d s · HA %s · Opal %s@%s:%s (AP %s, uplink %s, LAN ports %s) · DB %s (%d d) · "
-                 "auth %s · log %s", CFG["poll"], CFG["ha_url"] or "NOT CONFIGURED", CFG["opal_user"],
-                 CFG["opal_host"], CFG["opal_port"], CFG["ap_if"], CFG["sta_if"],
-                 ",".join(CFG["lan_ifs"]) or "—", CFG["db"], CFG["retention_days"],
+        opal = (f"Opal {CFG['opal_user']}@{CFG['opal_host']}:{CFG['opal_port']} (AP {CFG['ap_if']}, uplink "
+                f"{CFG['sta_if']}, LAN ports {','.join(CFG['lan_ifs']) or '—'})") if CFG["opal_host"] else "Opal disabled"
+        log.info("Start · every %d s · HA %s · %s · DB %s (%d d) · auth %s · log %s", CFG["poll"],
+                 CFG["ha_url"] or "NOT CONFIGURED", opal, CFG["db"], CFG["retention_days"],
                  "on" if CFG["auth_user"] else "off", logging.getLevelName(log.level))
         threading.Thread(target=poll_loop, daemon=True, name="network-poller").start()
 
@@ -770,9 +920,15 @@ def api_events():
             "WHERE ts>=? GROUP BY mac HAVING SUM(kind!='connect')>0 "
             "ORDER BY SUM(kind IN ('move_ap','move_band')) DESC, SUM(kind='disconnect') DESC LIMIT 10",
             (since,)).fetchall()
+    current = {d["mac"]: d["name"] for d in ((STATE["data"] or {}).get("devices") or [])}
+
+    def name_of(mac, stored):  # the current name takes precedence over the one stored at the time of the event
+        return current[mac] if current.get(mac) not in (None, "?") else stored
+
     return jsonify(hours=hours, totals=totals,
-                   events=[dict(ts=r[0], mac=r[1], name=r[2], kind=r[3], src=r[4], dst=r[5]) for r in rows],
-                   summary=[dict(mac=r[0], name=r[1], move_ap=r[2], move_band=r[3], disconnect=r[4]) for r in summary])
+                   events=[dict(ts=r[0], mac=r[1], name=name_of(r[1], r[2]), kind=r[3], src=r[4], dst=r[5]) for r in rows],
+                   summary=[dict(mac=r[0], name=name_of(r[0], r[1]), move_ap=r[2], move_band=r[3], disconnect=r[4])
+                            for r in summary])
 
 
 @app.post("/api/refresh")
@@ -793,7 +949,7 @@ def api_history():
         hours = min(CFG["retention_days"] * 24, max(1, int(request.args.get("hours", "24"))))
     except ValueError:
         hours = 24
-    bucket = max(CFG["poll"], hours * 3600 // 500)  # at most ~500 averaged points
+    bucket = max(CFG["poll"], hours * 3600 // 500)  # at most ~500 points, averaged
     with dbx() as db:
         rows = db.execute(
             "SELECT CAST(ts/? AS INTEGER)*? AS t, ROUND(AVG(rssi),1) FROM samples "
@@ -822,8 +978,55 @@ def api_name(mac):
     return jsonify(ok=True, name=name)
 
 
+@app.patch("/api/meta/<mac>")
+def api_meta(mac):
+    mac = norm_mac(mac)
+    if not re.fullmatch(r"[0-9a-f]{2}(?::[0-9a-f]{2}){5}", mac):
+        return jsonify(error="Invalid MAC"), 400
+    body = request.get_json(silent=True) or {}
+    kind = str(body.get("type") or "").strip()
+    room = " ".join(str(body.get("room") or "").split())[:40]
+    if kind and kind not in TYPES:
+        return jsonify(error="Invalid type"), 400
+    with META_LOCK:
+        try:
+            meta = read_meta(strict=True)
+        except (OSError, ValueError) as exc:
+            return jsonify(error=f"meta.json is unreadable: {exc}"), 500
+        entry = {k: v for k, v in (("type", kind), ("room", room)) if v}
+        if entry:
+            meta[mac] = entry
+        else:
+            meta.pop(mac, None)
+        write_meta(meta)
+    WAKE.set()
+    return jsonify(ok=True, **entry)
+
+
+@app.post("/api/meta/apply-suggestions")
+def api_apply_suggestions():
+    """Commits suggested types for all not-yet-classified devices."""
+    devices = (STATE["data"] or {}).get("devices", [])
+    with META_LOCK:
+        try:
+            meta = read_meta(strict=True)
+        except (OSError, ValueError) as exc:
+            return jsonify(error=f"meta.json is unreadable: {exc}"), 500
+        applied = 0
+        for d in devices:
+            entry = dict(meta.get(d["mac"]) or {})
+            if d.get("kind_auto") and d.get("kind") and not entry.get("type"):  # never overwrite a manually saved choice
+                entry["type"] = d["kind"]
+                meta[d["mac"]] = entry
+                applied += 1
+        if applied:
+            write_meta(meta)
+    WAKE.set()
+    return jsonify(ok=True, applied=applied)
+
+
 if not os.getenv("DASH_NO_WORKER"):
     start_worker()
 
 if __name__ == "__main__":
-    app.run(host=os.getenv("HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8089")), threaded=True)
+    app.run(host=os.getenv("HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8080")), threaded=True)

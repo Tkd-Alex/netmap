@@ -1,22 +1,5 @@
 {
-  "aa:bb:cc:dd:ee:01": "Living Room Shelly",
-  "aa:bb:cc:dd:ee:02": "Kitchen Shelly",
-  "aa:bb:cc:dd:ee:03": "Bedroom Shelly",
-  "aa:bb:cc:dd:ee:04": "Air Purifier",
-  "aa:bb:cc:dd:ee:05": "Echo Dot",
-  "aa:bb:cc:dd:ee:06": "Smart Plug",
-  "aa:bb:cc:dd:ee:07": "IR Remote",
-  "aa:bb:cc:dd:ee:08": "TP-Link Archer AX55",
-  "aa:bb:cc:dd:ee:09": "GL.iNet Opal",
-  "aa:bb:cc:dd:ee:0a": "Living Room TV",
-  "aa:bb:cc:dd:ee:0b": "Smartphone",
-  "aa:bb:cc:dd:ee:0c": "Proxmox Server",
-  "aa:bb:cc:dd:ee:0d": "Home Assistant",
-  "aa:bb:cc:dd:ee:0e": "Chromecast",
-  "aa:bb:cc:dd:ee:0f": "Google Home Mini",
-  "aa:bb:cc:dd:ee:10": "Reolink Camera",
-  "aa:bb:cc:dd:ee:11": "Smart Doorbell",
-  "aa:bb:cc:dd:ee:12": "Work Laptop",
-  "aa:bb:cc:dd:ee:13": "Tablet",
-  "aa:bb:cc:dd:ee:14": "Wi-Fi Extender"
+  "aa:bb:cc:00:00:01": "Lampada soggiorno",
+  "aa:bb:cc:00:00:02": "Telecamera ingresso",
+  "aa:bb:cc:00:00:03": "Smartphone Anna"
 }

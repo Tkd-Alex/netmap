@@ -1,4 +1,4 @@
-Flask>=3,<4
-paramiko>=3.4,<4
-requests>=2.31,<3
-gunicorn>=22,<24
+flask>=3.0
+requests>=2.31
+paramiko>=3.4
+waitress>=3.0

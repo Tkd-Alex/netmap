@@ -1,0 +1,24 @@
+[Unit]
+Description=Netmap - live map of the home network
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=netmap
+Group=netmap
+WorkingDirectory=/opt/netmap
+# Data lives outside the code: see DB_PATH / NAMES_FILE / META_FILE in the .env file
+EnvironmentFile=/opt/netmap/.env
+# A SINGLE process: polling lives in a thread
+ExecStart=/opt/netmap/venv/bin/waitress-serve --listen=0.0.0.0:8080 --threads=4 app:app
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/netmap
+
+[Install]
+WantedBy=multi-user.target

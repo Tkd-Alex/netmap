@@ -57,7 +57,8 @@ tbody tr{cursor:pointer}tbody tr:hover{background:#142237}tr.off td{color:var(--
 .empty{color:var(--muted);padding:10px}
 .panel>summary{cursor:pointer;font-size:15px;font-weight:600}.panel[open]>summary{margin-bottom:15px}.panel>summary span{font-weight:400}
 dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:14px;padding:20px;width:min(420px,92vw)}
-dialog::backdrop{background:rgba(5,9,15,.7)}dialog input{width:100%;margin:12px 0}
+dialog::backdrop{background:rgba(5,9,15,.7)}dialog input,dialog select{width:100%}.ic{width:15px;height:15px;margin-right:6px;vertical-align:-3px;color:var(--blue);flex:none}.ic.auto{opacity:.5}.ic.none{color:var(--muted)}
+.fld{display:grid;gap:4px;margin:12px 0 0;color:var(--muted);font-size:12px}dialog h3{margin-bottom:4px}dialog menu{margin-top:16px!important}
 dialog menu{display:flex;justify-content:flex-end;gap:8px;margin:0;padding:0}
 @media(max-width:800px){main{padding:18px 14px 40px}.stats{grid-template-columns:repeat(2,1fr)}.topology{grid-template-columns:1fr}.router{grid-column:auto;flex-direction:column;gap:7px}.arrow{transform:rotate(90deg)}.node{width:100%}.panel{padding:15px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
@@ -70,21 +71,22 @@ dialog menu{display:flex;justify-content:flex-end;gap:8px;margin:0;padding:0}
 <div class="stat"><label>Opal · client</label><div class="num" id="opcount">—</div><small id="opSub">&nbsp;</small></div>
 <div class="stat"><label>Uplink Opal → AX55</label><div class="num" id="uplinkNum">—</div><small id="uplinkSub">&nbsp;</small></div></section>
 <div id="errors" class="notices" role="status"></div><div id="alerts" class="notices"></div>
-<section class="panel"><div class="panel-head"><h2>Topologia e associazioni</h2><span class="footer">Seleziona un dispositivo per vedere lo storico del segnale</span></div><div id="topology" class="topology"><div class="empty">Lettura dello stato dei router…</div></div></section>
+<section class="panel"><div class="panel-head"><h2>Topologia e associazioni</h2><div class="ranges" id="viewSel" role="group" aria-label="Raggruppa per"><button type="button" data-v="net">Collegamento</button><button type="button" data-v="room">Stanza</button><button type="button" data-v="kind">Tipo</button></div></div><div id="topology" class="topology"><div class="empty">Lettura dello stato dei router…</div></div></section>
 <section class="panel"><div class="panel-head"><h2>Tutti i dispositivi</h2>
 <input id="filter" type="search" placeholder="Filtra nome, IP, MAC, access point…" aria-label="Filtra dispositivi">
 <select id="connectionFilter" aria-label="Filtra per stato di connessione"><option value="all">Tutti gli stati</option><option value="connected">Connessi</option><option value="disconnected">Non connessi</option></select>
-<button id="unlabeled" type="button" aria-pressed="false">Solo senza label</button><span class="footer" id="shown"></span></div>
+<select id="typeFilter" aria-label="Filtra per tipo"></select><select id="roomFilter" aria-label="Filtra per stanza"></select>
+<button id="unlabeled" type="button" aria-pressed="false">Solo senza label</button><button id="applySug" type="button" class="primary" hidden>Applica suggerimenti</button><span class="footer" id="shown"></span></div>
 <div class="table-wrap"><table><thead><tr id="head">
-<th aria-sort="none"><button type="button" data-k="name">Label</button></th><th aria-sort="none"><button type="button" data-k="ip">IP</button></th><th>MAC</th>
-<th aria-sort="none"><button type="button" data-k="ap">Collegato a</button></th><th>Banda / tipo</th><th>SSID</th>
+<th aria-sort="none"><button type="button" data-k="name">Label</button></th><th aria-sort="none"><button type="button" data-k="ip">IP</button></th><th>MAC</th><th aria-sort="none"><button type="button" data-k="kind">Tipo</button></th><th aria-sort="none"><button type="button" data-k="room">Stanza</button></th>
+<th aria-sort="none"><button type="button" data-k="ap">Collegato a</button></th><th>Banda</th><th>SSID</th>
 <th aria-sort="none"><button type="button" data-k="rssi">RSSI</button></th><th title="Link speed in Mbps">TX / RX Mbps</th></tr></thead><tbody id="rows"></tbody></table></div></section>
 <section class="panel" id="historyPanel" hidden><div class="panel-head"><h2 id="historyTitle">Storico segnale</h2>
 <div class="ranges" id="ranges"><button type="button" data-h="1">1 h</button><button type="button" data-h="6">6 h</button><button type="button" data-h="24">24 h</button><button type="button" data-h="168">7 g</button></div>
-<button type="button" id="closeHistory">Chiudi</button></div>
-<p class="footer" style="margin:-6px 0 10px">Vertical lines: purple = AP/band change · green = connected · red = disconnected</p>
-<div class="chart-box"><canvas id="chart" class="chart" role="img" aria-label="Signal strength chart over time"></canvas><div class="tip" id="tip" hidden></div></div></section>
-<details class="panel" id="evPanel"><summary>Access point changes and connections <span class="footer" id="evSum"></span></summary>
+<button type="button" id="editHist">Modifica</button><button type="button" id="closeHistory">Chiudi</button></div>
+<p class="footer" style="margin:-6px 0 10px">Linee verticali: viola = cambio AP/banda · verde = connessione · rosso = disconnessione</p>
+<div class="chart-box"><canvas id="chart" class="chart" role="img" aria-label="Grafico del segnale nel tempo"></canvas><div class="tip" id="tip" hidden></div></div></section>
+<details class="panel" id="evPanel"><summary>Cambi di access point e connessioni <span class="footer" id="evSum"></span></summary>
 <div class="panel-head"><span class="footer" style="flex:1">Quanto spesso i dispositivi passano tra Opal, AX55 ed extender, o cambiano banda. Clic su una riga per vedere lo storico.</span><div class="ranges" id="evRanges"><button type="button" data-h="24" aria-pressed="true">24 h</button><button type="button" data-h="168">7 g</button></div></div>
 <div class="table-wrap"><table style="min-width:520px"><thead><tr><th>Most unstable</th><th>AP changes</th><th>Band/network changes</th><th>Disconnections</th></tr></thead><tbody id="evTop"></tbody></table></div>
 <div class="table-wrap" style="margin-top:14px;max-height:360px"><table style="min-width:620px"><thead><tr><th>Quando</th><th>Dispositivo</th><th>Evento</th><th>Da → a</th></tr></thead><tbody id="evList"></tbody></table></div>
@@ -93,8 +95,10 @@ dialog menu{display:flex;justify-content:flex-end;gap:8px;margin:0;padding:0}
 <div class="table-wrap"><table style="min-width:680px"><thead><tr><th>Sorgente</th><th>Stato</th><th>Ultimo ok</th><th>Durata</th><th>Ultima lettura / errore</th><th>Errori di fila</th></tr></thead><tbody id="diagRows"></tbody></table></div>
 <p class="footer" id="diagFoot" style="margin-top:10px"></p></details>
 <p class="footer" style="margin:16px 3px">Ultimo aggiornamento: <span id="fulltime">—</span> · storico locale SQLite</p>
-<dialog id="dlg"><form method="dialog" id="renameForm"><h3>Rinomina dispositivo</h3><div class="mono muted" id="dlgMac"></div>
-<input id="dlgName" maxlength="80" autocomplete="off" placeholder="Label (vuoto = rimuovi)" aria-label="Label del dispositivo">
+<dialog id="dlg"><form method="dialog" id="renameForm"><h3>Modifica dispositivo</h3><div class="mono muted" id="dlgMac"></div>
+<label class="fld">Nome<input id="dlgName" maxlength="80" autocomplete="off" placeholder="Label (vuoto = nome rilevato)"></label>
+<label class="fld">Tipo<select id="dlgKind"></select></label><div class="footer" id="dlgHint"></div>
+<label class="fld">Stanza<input id="dlgRoom" list="roomList" maxlength="40" autocomplete="off" placeholder="es. Cucina"></label><datalist id="roomList"></datalist>
 <menu><button type="button" id="dlgCancel">Annulla</button><button class="primary" value="ok">Salva</button></menu></form></dialog></main>
 <script>
 const POLL={{ poll*1000 }},$=id=>document.getElementById(id);
@@ -106,7 +110,20 @@ const badge=x=>x==null?'<span class="muted">—</span>':`<span class="rssi ${str
 const fmt=n=>n==null?'—':Number(n).toLocaleString('it-IT',{maximumFractionDigits:1});
 const ago=ts=>{if(!ts)return 'mai visto';const s=Date.now()/1000-ts;return s<90?'ora':s<5400?`${Math.round(s/60)} min fa`:s<172800?`${Math.round(s/3600)} h fa`:`${Math.round(s/86400)} g fa`};
 const seen=ts=>ts?'visto '+ago(ts):'mai visto online';
-const link=d=>d.connected?(d.ap_name?`${d.ap_name}${d.connection?' · '+d.connection:''}`:d.ap):`Non connesso · ${seen(d.last_seen)}${d.arp?` · ARP Opal: ${d.arp}`:''}`;
+const link=d=>d.connected?(d.ap_name?`${d.ap_name}${d.connection?' · '+d.connection:''}`:d.ap)+(d.alias&&!d.via?' · visto anche come MAC Opal':''):`Non connesso · ${seen(d.last_seen)}${d.arp?` · ARP Opal: ${d.arp}`:''}`;
+const ICON={pc:'<rect x="3" y="5" width="18" height="11" rx="2"/><path d="M2 20h20"/>',
+ server:'<rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/>',
+ smartphone:'<rect x="7" y="2" width="10" height="20" rx="2.5"/><path d="M11 18h2"/>',
+ tv:'<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8M12 17v4"/>',
+ camera:'<path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/>',
+ luce_presa:'<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3z"/>',
+ iot:'<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>',
+ rete:'<rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 17h.01M11 17h.01M8 10a6 6 0 0 1 8 0M5.5 7.5a10 10 0 0 1 13 0"/>',
+ altro:'<circle cx="12" cy="12" r="9"/><path d="M8 12h.01M12 12h.01M16 12h.01"/>',
+ none:'<circle cx="12" cy="12" r="9" stroke-dasharray="3 3"/>'};
+const icon=(k,auto,label)=>`<svg class="ic${k?'':' none'}${auto?' auto':''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="${esc(label||'')}"><title>${esc(label||'')}</title>${ICON[k]||ICON.none}</svg>`;
+const iconFor=d=>icon(d.kind,d.kind_auto,d.kind?((DATA?.types||{})[d.kind]||d.kind)+(d.kind_auto?' (suggerito)':''):'Non classificato');
+const kindLabel=d=>d.kind?((DATA?.types||{})[d.kind]||d.kind)+(d.kind_auto?' (?)':''):'';
 const rates=d=>d.tx==null&&d.rx==null?'—':`${fmt(d.tx)} / ${fmt(d.rx)} Mbps`;
 async function api(url,opts={}){const r=await fetch(url,{cache:'no-store',...opts,headers:{'X-Requested-With':'dashboard',...(opts.headers||{})}});if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}
 async function refresh(){try{const s=await api('/api/data'+(TS?`?since=${TS}`:''));if(!s.unchanged)render(s)}catch(e){$('errors').innerHTML='<div class="notice">Dashboard non raggiungibile.</div>'}}
@@ -116,42 +133,65 @@ function render(s){S=s;TS=s.ts;DATA=s.data;const ds=DATA?.devices||[],live=ds.fi
  $('fulltime').textContent=s.ts?new Date(s.ts*1000).toLocaleString('it-IT'):'—';
  $('errors').innerHTML=Object.entries(s.errors||{}).map(([k,v])=>`<div class="notice"><b>${esc(k)}</b> · ${esc(v)}</div>`).join('');
  const names={router:'AX55 (Home Assistant)',opal:'Opal'};
- $('alerts').innerHTML=[...(DATA?.alerts||[]),...Object.entries(DATA?.stale||{}).map(([k,v])=>({level:'warn',text:`Dati ${names[k]||k} non aggiornati da ${v} s: mostro l'ultima lettura valida`}))].map(a=>`<div class="notice ${esc(a.level)}">${esc(a.text)}</div>`).join('');
+ $('alerts').innerHTML=[...(DATA?.alerts||[]),...Object.entries(DATA?.stale||{}).map(([k,v])=>({level:'warn',text:`Dati ${names[k]||k} non aggiornati da ${v} s: mostro l'ultima lettura valida`}))].map(a=>`<div class="notice ${esc(a.level)}"${a.mac?` data-mac="${esc(a.mac)}" tabindex="0" role="button" style="cursor:pointer" title="Mostra lo storico"`:''}>${esc(a.text)}</div>`).join('');
  const ax=live.filter(d=>['wired','w5','w2','iot','guest'].includes(d.group)),ow=live.filter(d=>d.group==='opal'),ocab=live.filter(d=>d.group==='opal_wired');
  $('count').textContent=live.length;$('countSub').textContent=`${ds.length} noti in totale`;$('axcount').textContent=ax.length;
  $('opcount').textContent=ow.length+ocab.length;$('opSub').textContent=`${ow.length} Wi-Fi · ${ocab.length} cavo`;
  const o=DATA?.opal,sig=o?.sta?.signal,rs=ow.filter(d=>d.rssi!=null);
  $('uplinkNum').innerHTML=sig==null?'—':`<span class="${strength(sig)}">${sig} dBm</span>`;
  $('uplinkSub').textContent=o?[o.snr!=null?`SNR ${o.snr} dB`:'',rs.length?`client Opal: peggiore ${Math.min(...rs.map(d=>d.rssi))} dBm`:''].filter(Boolean).join(' · ')||'\u00a0':'Opal non raggiungibile';
- drawTopology();drawTable();renderDiag(s.health);if($('evPanel').open)loadEvents();if(!$('historyPanel').hidden)loadHistory()}
+ fillFilters();drawTopology();drawTable();renderDiag(s.health);if($('evPanel').open)loadEvents();if(!$('historyPanel').hidden)loadHistory()}
 function renderDiag(h){if(!h)return;const src=Object.values(h.sources),bad=src.filter(x=>x.ok===false).length;
- $('diagRows').innerHTML=src.map(x=>`<tr><td>${esc(x.label)}</td><td><span class="${x.ok==null?'muted':x.ok?'good':'bad'}">${x.ok==null?'in attesa':x.ok?'● ok':'● errore'}</span></td><td>${x.last_ok?esc(ago(x.last_ok)):'—'}</td><td>${x.duration!=null?fmt(x.duration)+' s':'—'}</td><td>${x.ok===false?`<span class="bad">${esc(x.last_error)}</span>`:esc(x.detail||'—')}</td><td>${x.fails||0}</td></tr>`).join('');
+ $('diagRows').innerHTML=src.map(x=>`<tr><td>${esc(x.label)}</td><td><span class="${x.ok==null?'muted':x.ok?'good':'bad'}">${x.ok==null?(x.detail?'disattivato':'in attesa'):x.ok?'● ok':'● errore'}</span></td><td>${x.last_ok?esc(ago(x.last_ok)):'—'}</td><td>${x.duration!=null?fmt(x.duration)+' s':'—'}</td><td>${x.ok===false?`<span class="bad">${esc(x.last_error)}</span>`:esc(x.detail||'—')}</td><td>${x.fails||0}</td></tr>`).join('');
  $('diagSum').textContent=bad?`· ${bad} sorgente/i in errore`:'· tutto regolare';
  $('diagFoot').textContent=`Ciclo n. ${h.cycle}, ogni ${h.poll} s · in esecuzione da ${ago(h.started).replace(' fa','')}`}
-function card(d){return `<div class="device${d.connected?'':' off'}" data-mac="${esc(d.mac)}" tabindex="0" role="button"><div class="dtop"><span class="dname" title="${esc(d.name)}">${esc(d.name||'Senza label')}</span>${badge(d.rssi)}</div><div class="dmeta">${esc(d.ip||'IP non disponibile')} · ${esc(d.mac)}</div><div class="dmeta">${esc(d.connected?d.band:seen(d.last_seen))}</div></div>`}
+function card(d){return `<div class="device${d.connected?'':' off'}" data-mac="${esc(d.mac)}" tabindex="0" role="button"><div class="dtop"><span class="dname" title="${esc(d.name)}">${iconFor(d)}${esc(d.name||'Senza label')}</span>${badge(d.rssi)}</div><div class="dmeta">${esc(d.ip||'IP non disponibile')} · ${esc(d.mac)}</div><div class="dmeta">${esc([d.connected?(d.via||d.band):seen(d.last_seen),d.room,kindLabel(d)].filter(Boolean).join(' · '))}</div></div>`}
 const grp=(cls,title,list,open)=>list.length?`<div class="group ${cls}"><h3>${title} <span>· ${list.length}</span></h3><div class="device-grid">${list.map(card).join('')}</div></div>`:'';
-function drawTopology(){if(!DATA)return;const ds=DATA.devices,by=g=>ds.filter(d=>d.group===g&&d.connected);
+let VIEW='net',FSIG='';try{VIEW=localStorage.getItem('view')||'net'}catch(e){}
+function syncView(){document.querySelectorAll('#viewSel button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.v===VIEW)))}
+function drawGroups(){const ds=DATA.devices,T=DATA.types||{},key=VIEW==='room'?d=>d.room||'':d=>d.kind||'',m=new Map();
+ for(const d of ds){const k=key(d);if(!m.has(k))m.set(k,[]);m.get(k).push(d)}
+ const order=VIEW==='kind'?[...Object.keys(T),'']:[...[...m.keys()].filter(Boolean).sort((a,b)=>a.localeCompare(b,'it')),''];
+ const title=k=>k===''?(VIEW==='room'?'Senza stanza':'Non classificati'):(VIEW==='kind'?T[k]||k:k);
+ return order.filter(k=>m.has(k)).map(k=>{const l=m.get(k).sort((a,b)=>(b.connected-a.connected)||(a.name||'').localeCompare(b.name||'','it')),on=l.filter(d=>d.connected).length;
+  return `<div class="group g-ax"><h3>${VIEW==='kind'?icon(k||null,false,title(k)):''}${esc(title(k))} <span>· ${on}/${l.length} online</span></h3><div class="device-grid">${l.map(card).join('')}</div></div>`}).join('')||'<div class="empty">Nessun dispositivo.</div>'}
+function fillFilters(){const ds=DATA?.devices||[],T=DATA?.types||{},rooms=[...new Set(ds.map(d=>d.room).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'it')),n=ds.filter(d=>d.kind_auto).length;
+ const b=$('applySug');b.hidden=!n;b.textContent=`Applica suggerimenti (${n})`;
+ const sig=JSON.stringify([T,rooms]);if(sig===FSIG)return;FSIG=sig;const tf=$('typeFilter'),rf=$('roomFilter'),tv=tf.value,rv=rf.value;
+ tf.innerHTML='<option value="all">Tutti i tipi</option>'+Object.entries(T).map(([k,v])=>`<option value="${esc(k)}">${esc(v)}</option>`).join('')+'<option value="none">Non classificati</option>';
+ rf.innerHTML='<option value="all">Tutte le stanze</option>'+rooms.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('')+'<option value="none">Senza stanza</option>';
+ tf.value=[...tf.options].some(o=>o.value===tv)?tv:'all';rf.value=[...rf.options].some(o=>o.value===rv)?rv:'all';
+ $('roomList').innerHTML=rooms.map(r=>`<option value="${esc(r)}">`).join('')}
+function drawTopology(){if(!DATA)return;if(VIEW!=='net'){$('topology').innerHTML=drawGroups();return}const ds=DATA.devices,by=g=>ds.filter(d=>d.group===g&&d.connected);
  let h=`<div class="router"><div class="node"><div class="node-title">Internet</div><small>Rete locale</small></div><span class="arrow">⟷</span><div class="node"><div class="node-title">TP-Link Archer AX55</div><small>${esc(DATA.router.fw||'Stato non disponibile')}</small></div></div>`;
  h+=grp('g-wired','Ethernet RJ45',by('wired'))+grp('g-ax','Wi-Fi 5 GHz · AX55',by('w5'))+grp('g-ax','Wi-Fi 2.4 GHz · AX55',by('w2'))+grp('g-ax','Wi-Fi IoT · AX55',by('iot'))+grp('g-ax','Wi-Fi ospiti · AX55',by('guest'));
  const o=DATA.opal;if(o){const w=by('opal'),c=by('opal_wired');
   h+=`<div class="router"><span class="arrow">↓ uplink 5 GHz ${badge(o.sta?.signal)}</span><div class="node opalnode" data-mac="opal:uplink" tabindex="0" role="button" title="Mostra lo storico dell'uplink"><div class="node-title">GL.iNet Opal</div><small>uplink: ${esc(o.uplink||'—')} · ${esc(o.sta?.essid||'')}</small><small>${esc(o.sta?.bssid||'')}</small></div></div>`;
   h+=grp('g-wired','Opal · RJ45',c)+`<div class="group g-opal"><h3>Opal · Wi-Fi 2.4 GHz · ${esc(o.ap?.essid||'')} <span>canale ${esc(o.ap?.channel??'—')} · ${w.length} client</span></h3><div class="device-grid">${w.map(card).join('')||'<span class="empty">Nessun client associato</span>'}</div></div>`}
  const unk=ds.filter(d=>d.connected&&d.group==='unknown'),off=ds.filter(d=>!d.connected);
- h+=grp('','Connected, link type not determined',unk);
+ h+=grp('','Connessi, collegamento non determinato',unk);
  if(off.length)h+=`<details class="group" style="grid-column:1/-1"><summary>Non connessi <span>· ${off.length}</span></summary><div class="device-grid">${off.map(card).join('')}</div></details>`;
  const prev=document.querySelector('#topology details')?.open;$('topology').innerHTML=h;if(prev)document.querySelector('#topology details')?.setAttribute('open','')}
 const IPN=ip=>ip?ip.split('.').reduce((a,n)=>a*256+(+n),0):Infinity;
-const SORT={name:d=>(d.name||'').toLowerCase(),ip:d=>IPN(d.ip),ap:d=>(d.connected?'0':'1')+d.ap+(d.name||'').toLowerCase(),rssi:d=>d.rssi??-999};
-function drawTable(){if(!DATA)return;const q=$('filter').value.toLowerCase(),cf=$('connectionFilter').value;
- let ds=DATA.devices.filter(d=>(!onlyUnlabeled||!d.labeled)&&(cf==='all'||(cf==='connected')===d.connected)&&[d.name,d.ip,d.mac,link(d),d.ssid,d.band].join(' ').toLowerCase().includes(q));
+const SORT={name:d=>(d.name||'').toLowerCase(),ip:d=>IPN(d.ip),ap:d=>(d.connected?'0':'1')+d.ap+(d.name||'').toLowerCase(),rssi:d=>d.rssi??-999,kind:d=>(kindLabel(d)||'~').toLowerCase(),room:d=>(d.room||'~').toLowerCase()};
+function drawTable(){if(!DATA)return;const q=$('filter').value.toLowerCase(),cf=$('connectionFilter').value,tf=$('typeFilter').value||'all',rf=$('roomFilter').value||'all';
+ let ds=DATA.devices.filter(d=>(!onlyUnlabeled||!d.labeled)&&(cf==='all'||(cf==='connected')===d.connected)&&(tf==='all'||(tf==='none'?!d.kind:d.kind===tf))&&(rf==='all'||(rf==='none'?!d.room:d.room===rf))&&[d.name,d.ip,d.mac,link(d),d.ssid,d.band,d.room,kindLabel(d)].join(' ').toLowerCase().includes(q));
  const f=SORT[sortKey];ds.sort((a,b)=>{const x=f(a),y=f(b);return(x<y?-1:x>y?1:0)*sortDir});
  document.querySelectorAll('#head th').forEach(th=>{const b=th.querySelector('button');if(!b)return;const on=b.dataset.k===sortKey;th.setAttribute('aria-sort',on?(sortDir>0?'ascending':'descending'):'none');b.textContent=b.textContent.replace(/ [▲▼]$/,'')+(on?(sortDir>0?' ▲':' ▼'):'')});
  $('shown').textContent=`${ds.length} dispositivi`;
- $('rows').innerHTML=ds.map(d=>`<tr class="${d.connected?'':'off'}" data-mac="${esc(d.mac)}" tabindex="0"><td><b>${esc(d.name||'—')}</b> <button type="button" class="rename" data-name="${esc(d.name||'')}" title="Rinomina" aria-label="Rinomina ${esc(d.name||d.mac)}">✎</button></td><td>${esc(d.ip||'—')}</td><td class="mono">${esc(d.mac)}</td><td>${esc(link(d))}</td><td>${esc(d.connected?d.band:'—')}</td><td>${esc(d.ssid||'—')}</td><td>${badge(d.rssi)}</td><td>${rates(d)}</td></tr>`).join('')}
-function openRename(mac,current){$('dlgMac').textContent=mac;$('dlgName').value=current||'';$('dlg').dataset.mac=mac;$('dlg').showModal();$('dlgName').select()}
-async function saveName(){const mac=$('dlg').dataset.mac;try{await api('/api/names/'+encodeURIComponent(mac),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('dlgName').value})});await refreshNow()}catch(e){$('errors').innerHTML='<div class="notice">Salvataggio della label non riuscito.</div>'}}
+ $('rows').innerHTML=ds.map(d=>`<tr class="${d.connected?'':'off'}" data-mac="${esc(d.mac)}" tabindex="0"><td><b>${esc(d.name||'—')}</b> <button type="button" class="rename" data-name="${esc(d.name||'')}" title="Rinomina" aria-label="Rinomina ${esc(d.name||d.mac)}">✎</button></td><td>${esc(d.ip||'—')}</td><td class="mono">${esc(d.mac)}</td><td title="${d.kind_auto?'Suggerito automaticamente: apri la modifica per confermarlo':''}">${iconFor(d)}${esc(kindLabel(d)||'—')}</td><td>${esc(d.room||'—')}</td><td>${esc(link(d))}</td><td>${esc(d.connected?(d.via||d.band):'—')}</td><td>${esc(d.ssid||'—')}</td><td>${badge(d.rssi)}</td><td>${rates(d)}</td></tr>`).join('')}
+function openEdit(mac){const d=DATA?.devices.find(x=>x.mac===mac);if(!d)return;$('dlg').dataset.mac=mac;$('dlgMac').textContent=mac;$('dlgName').value=d.name||'';
+ $('dlgKind').innerHTML='<option value="">Automatico / non classificato</option>'+Object.entries(DATA.types||{}).map(([k,v])=>`<option value="${esc(k)}">${esc(v)}</option>`).join('');
+ $('dlgKind').value=d.kind_auto?'':(d.kind||'');$('dlgHint').textContent=d.kind_auto?'Suggerito: '+kindLabel(d).replace(' (?)','')+' · scegli un tipo per confermarlo':'';
+ $('dlgRoom').value=d.room||'';$('dlg').showModal();$('dlgName').select()}
+async function saveEdit(){const mac=$('dlg').dataset.mac,name=$('dlgName').value,type=$('dlgKind').value,room=$('dlgRoom').value,j=b=>({method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+ try{await Promise.all([api('/api/names/'+encodeURIComponent(mac),j({name})),api('/api/meta/'+encodeURIComponent(mac),j({type,room}))]);
+  const d=DATA.devices.find(x=>x.mac===mac);if(d){if(name.trim())d.name=name.trim();d.room=room.trim();if(type){d.kind=type;d.kind_auto=false}else if(!d.kind_auto)d.kind=null}
+  fillFilters();drawTopology();drawTable();setTimeout(refresh,8000)}catch(e){$('errors').innerHTML='<div class="notice">Salvataggio non riuscito.</div>'}}
+async function applySuggestions(){if(!confirm('Assegnare a tutti i dispositivi non classificati il tipo suggerito?'))return;
+ try{await api('/api/meta/apply-suggestions',{method:'POST'});for(const d of DATA.devices)d.kind_auto=false;fillFilters();drawTopology();drawTable();setTimeout(refresh,8000)}catch(e){$('errors').innerHTML='<div class="notice">Operazione non riuscita.</div>'}}
 async function loadHistory(){const {mac,hours}=hist;try{const [r,e]=await Promise.all([api(`/api/history?mac=${encodeURIComponent(mac)}&hours=${hours}`),api(`/api/events?mac=${encodeURIComponent(mac)}&hours=${hours}`).catch(()=>({events:[]}))]);hist.res=r;hist.events=e.events||[];drawChart(r)}catch(e){hist.res=null}}
-let evHours=24;const KIND={move_ap:['AP change','mid'],move_band:['Band/network change','mid'],connect:['Connected','good'],disconnect:['Disconnected','bad']};
+let evHours=24;const KIND={move_ap:['Cambio AP','mid'],move_band:['Cambio banda/rete','mid'],connect:['Connesso','good'],disconnect:['Disconnesso','bad']};
 async function loadEvents(){try{drawEvents(await api(`/api/events?hours=${evHours}`))}catch(e){$('evList').innerHTML='<tr><td colspan="4" class="bad">Eventi non disponibili.</td></tr>'}}
 function drawEvents(r){const t=r.totals||{},when=ts=>new Date(ts*1000).toLocaleString('it-IT',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit',second:'2-digit'});
  $('evSum').textContent=`· ${(t.move_ap||0)+(t.move_band||0)} cambi, ${t.disconnect||0} disconnessioni nelle ultime ${evHours>24?evHours/24+' giorni':evHours+' ore'}`;
@@ -161,7 +201,7 @@ function showHistory(mac){const d=DATA?.devices.find(x=>x.mac===mac);hist.mac=ma
 function syncRanges(){document.querySelectorAll('#ranges button').forEach(b=>b.setAttribute('aria-pressed',String(+b.dataset.h===hist.hours)))}
 function drawChart(r){const c=$('chart'),ctx=c.getContext('2d'),w=c.clientWidth,h=c.clientHeight,dpr=devicePixelRatio||1,cs=getComputedStyle(document.documentElement),col=n=>cs.getPropertyValue(n).trim();
  c.width=w*dpr;c.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);pts=[];ctx.font='11px system-ui';ctx.fillStyle=col('--muted');
- if(!r||!r.points.length){ctx.fillText('No samples in this range: wired devices have no RSSI.',12,32);return}
+ if(!r||!r.points.length){ctx.fillText('Nessun campione in questo intervallo: i dispositivi cablati non hanno RSSI.',12,32);return}
  const L=48,R=10,T=10,B=22,t1=Date.now()/1000,t0=t1-r.hours*3600,vs=r.points.map(p=>p[1]),lo=Math.min(-90,Math.floor(Math.min(...vs)/5)*5),hi=Math.max(-40,Math.ceil(Math.max(...vs)/5)*5);
  const X=t=>L+(t-t0)/(t1-t0)*(w-L-R),Y=v=>T+(hi-v)/(hi-lo)*(h-T-B);
  ctx.strokeStyle=col('--line');ctx.lineWidth=1;for(let v=Math.ceil(lo/10)*10;v<=hi;v+=10){ctx.beginPath();ctx.moveTo(L,Y(v));ctx.lineTo(w-R,Y(v));ctx.stroke();ctx.fillText(v+' dBm',2,Y(v)+4)}
@@ -177,11 +217,11 @@ $('chart').addEventListener('pointermove',e=>{if(!pts.length)return;const x=e.of
  tip.style.left=Math.min(best.x+10,$('chart').clientWidth-tip.offsetWidth-4)+'px';tip.style.top=Math.max(best.y-34,0)+'px'});
 $('chart').addEventListener('pointerleave',()=>tip.hidden=true);
 new ResizeObserver(()=>{if(!$('historyPanel').hidden&&hist.res)drawChart(hist.res)}).observe($('chart'));
-// eventi (delegati: nessun onclick inline, tutto raggiungibile da tastiera)
+// events (delegated: no inline onclick, everything reachable from the keyboard)
 const target=e=>e.target.closest('[data-mac]');
-function activate(e){const r=e.target.closest('.rename');if(r){e.stopPropagation();openRename(r.closest('tr').dataset.mac,r.dataset.name);return}const t=target(e);if(t)showHistory(t.dataset.mac)}
-for(const id of ['topology','rows','evTop','evList'])$(id).addEventListener('click',activate);
-for(const id of ['topology','rows','evTop','evList'])$(id).addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&!e.target.closest('button')){e.preventDefault();activate(e)}});
+function activate(e){const r=e.target.closest('.rename');if(r){e.stopPropagation();openEdit(r.closest('tr').dataset.mac);return}const t=target(e);if(t)showHistory(t.dataset.mac)}
+for(const id of ['topology','rows','evTop','evList','alerts'])$(id).addEventListener('click',activate);
+for(const id of ['topology','rows','evTop','evList','alerts'])$(id).addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&!e.target.closest('button')){e.preventDefault();activate(e)}});
 $('head').addEventListener('click',e=>{const b=e.target.closest('button[data-k]');if(!b)return;sortDir=sortKey===b.dataset.k?-sortDir:1;sortKey=b.dataset.k;drawTable()});
 $('filter').addEventListener('input',drawTable);$('connectionFilter').addEventListener('change',drawTable);
 $('unlabeled').addEventListener('click',()=>{onlyUnlabeled=!onlyUnlabeled;$('unlabeled').setAttribute('aria-pressed',onlyUnlabeled);$('unlabeled').textContent=onlyUnlabeled?'Mostra tutti':'Solo senza label';drawTable()});
@@ -190,8 +230,12 @@ $('evPanel').addEventListener('toggle',()=>{if($('evPanel').open)loadEvents()});
 $('evRanges').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;evHours=+b.dataset.h;document.querySelectorAll('#evRanges button').forEach(x=>x.setAttribute('aria-pressed',String(x===b)));loadEvents()});
 $('closeHistory').addEventListener('click',()=>$('historyPanel').hidden=true);
 $('refreshBtn').addEventListener('click',refreshNow);
+$('typeFilter').addEventListener('change',drawTable);$('roomFilter').addEventListener('change',drawTable);$('applySug').addEventListener('click',applySuggestions);
+$('editHist').addEventListener('click',()=>{if(hist.mac&&hist.mac!=='opal:uplink')openEdit(hist.mac)});
+$('viewSel').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;VIEW=b.dataset.v;try{localStorage.setItem('view',VIEW)}catch(x){}syncView();drawTopology()});
+syncView();
 $('dlgCancel').addEventListener('click',()=>$('dlg').close('cancel'));
-$('dlg').addEventListener('close',()=>{if($('dlg').returnValue==='ok')saveName()});
+$('dlg').addEventListener('close',()=>{if($('dlg').returnValue==='ok')saveEdit()});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
 refresh();setInterval(()=>{if(!document.hidden)refresh()},POLL);
 </script></body></html>

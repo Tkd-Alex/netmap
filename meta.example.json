@@ -1,0 +1,5 @@
+{
+  "aa:bb:cc:00:00:01": {"type": "luce_presa", "room": "Soggiorno"},
+  "aa:bb:cc:00:00:02": {"type": "camera", "room": "Ingresso"},
+  "aa:bb:cc:00:00:03": {"type": "smartphone"}
+}

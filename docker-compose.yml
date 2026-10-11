@@ -1,10 +1,17 @@
 services:
-  wifi-mapper:
+  netmap:
     build: .
-    container_name: wifi-mapper
+    container_name: netmap
     restart: unless-stopped
-    env_file: .env
     ports:
       - "8080:8080"
+    env_file: .env
+    environment:
+      TZ: Europe/Rome
+      # paths INSIDE the container (the SSH key is mounted below, read-only)
+      OPAL_KEY: /secrets/opal_ed25519
+      # OPAL_KNOWN_HOSTS: /secrets/known_hosts
     volumes:
-      - ./data:/data
+      - ./data:/data                          # database, names.json, meta.json
+      - ./secrets/opal_ed25519:/secrets/opal_ed25519:ro
+      # - ./secrets/known_hosts:/secrets/known_hosts:ro
