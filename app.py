@@ -22,6 +22,26 @@ from flask import Flask, Response, jsonify, render_template, request
 
 ROOT = Path(__file__).resolve().parent
 
+# LOG language (NETMAP_LANG=it|en, default en). The PAGE language is chosen by the browser.
+LOG_LANG = "it" if os.getenv("NETMAP_LANG", "en").lower().startswith("it") else "en"
+
+
+def L(it, en):
+    """Log text in the language chosen via NETMAP_LANG."""
+    return it if LOG_LANG == "it" else en
+
+
+class Msg(dict):
+    """Bilingual message: in the API it's {"it": …, "en": …} (the page chooses), in logs str(msg) is used."""
+
+    def __str__(self):
+        return self[LOG_LANG]
+
+
+def msg(it, en):
+    return Msg(it=it, en=en)
+
+
 
 def norm_mac(mac):
     value = re.sub(r"[^0-9a-fA-F]", "", mac or "").lower()
@@ -92,14 +112,17 @@ CFG = dict(
 GROUP = {"WIRED": "wired", "HOST_5G": "w5", "HOST_6G": "w5", "HOST_2G": "w2",
          "IOT_2G": "iot", "IOT_5G": "iot", "IOT_6G": "iot",
          "GUEST_2G": "guest", "GUEST_5G": "guest", "GUEST_6G": "guest"}
-LABEL = {"wired": "AX55 · cavo", "w5": "AX55 · 5 GHz", "w2": "AX55 · 2.4 GHz", "iot": "AX55 · IoT",
-         "guest": "AX55 · ospiti", "opal": "Opal · 2.4 GHz", "opal_wired": "Opal · cavo",
-         "unknown": "non determinato"}
+LABEL = {"wired": "AX55 · wired", "w5": "AX55 · 5 GHz", "w2": "AX55 · 2.4 GHz", "iot": "AX55 · IoT",
+         "guest": "AX55 · guest", "opal": "Opal · 2.4 GHz", "opal_wired": "Opal · wired",
+         "unknown": "undetermined"}  # neutral tokens: the page translates them
 BAND = {"wired": "RJ45", "opal_wired": "RJ45", "w5": "5 GHz", "w2": "2.4 GHz", "iot": "2.4 GHz",
         "guest": "2.4 GHz", "opal": "2.4 GHz"}
-TYPES = {"pc": "PC / laptop", "server": "Server / VM / LXC", "smartphone": "Smartphone / tablet",
-         "tv": "TV / audio / media", "camera": "Telecamera / campanello", "luce_presa": "IoT · luci / prese / relè",
-         "iot": "IoT · altro", "rete": "Rete (router / AP)", "altro": "Altro"}
+TYPES = {"pc": msg("PC / laptop", "PC / laptop"), "server": msg("Server / VM / LXC", "Server / VM / LXC"),
+         "smartphone": msg("Smartphone / tablet", "Smartphone / tablet"), "tv": msg("TV / audio / media", "TV / audio / media"),
+         "camera": msg("Telecamera / campanello", "Camera / doorbell"),
+         "luce_presa": msg("IoT · luci / prese / relè", "IoT · lights / plugs / relays"),
+         "iot": msg("IoT · altro", "IoT · other"), "rete": msg("Rete (router / AP)", "Network (router / AP)"),
+         "altro": msg("Altro", "Other")}
 OUI_KIND = {"bc:24:11": "server"}  # Proxmox virtual MACs (VM and LXC)
 KIND_HINTS = [  # in priority order; words <4 chars only if an exact "chunk" of the name
     ("camera", "cam camera telecamera reolink rlc doorbell campanello citofono ring spioncino webcam"),
@@ -208,7 +231,8 @@ class OpalLink:
                        disabled_algorithms=dict(pubkeys=["rsa-sha2-256", "rsa-sha2-512"]))
         client.get_transport().set_keepalive(20)
         self.new_session = True
-        log.info("Opal: new SSH session to %s@%s:%s", CFG["opal_user"], CFG["opal_host"], CFG["opal_port"])
+        log.info(L("Opal: nuova sessione SSH verso %s@%s:%s", "Opal: new SSH session to %s@%s:%s"),
+                 CFG["opal_user"], CFG["opal_host"], CFG["opal_port"])
         return client
 
     def close(self):
@@ -295,13 +319,17 @@ def fetch_opal():
     outputs, timings = OPAL.run_sections(sections)
     output = "".join(f"##{name}\n{outputs[name].rstrip()}\n" for name, _ in sections)
     parsed = parse_opal(output)
-    log.debug("Opal · time per command: %s", ", ".join(f"{n} {t:.2f} s" for n, t in timings.items()))
+    log.debug(L("Opal · tempi per comando: %s", "Opal · time per command: %s"), ", ".join(f"{n} {t:.2f} s" for n, t in timings.items()))
     ranked = sorted(timings.items(), key=lambda kv: -kv[1])
     slow = [f"{n} {t:.2f} s" for n, t in (ranked[:2] if sum(timings.values()) >= 2 else
                                            [kv for kv in ranked if kv[1] >= 1])]
-    parsed["meta"] = dict(detail=f"{len(parsed['clients'])} Wi-Fi clients, {len(parsed['wired'])} wired · "
-                                 f"SSH {'new' if OPAL.new_session else 'reused'} · {len(output)} B"
-                                 + (f" · slow: {', '.join(slow)}" if slow else ""))
+    n_wifi, n_wired = len(parsed["clients"]), len(parsed["wired"])
+    session = ("nuova", "new") if OPAL.new_session else ("riusata", "reused")
+    parsed["meta"] = dict(detail=msg(
+        f"{n_wifi} client Wi-Fi, {n_wired} cavo · SSH {session[0]} · {len(output)} B"
+        + (f" · lenti: {', '.join(slow)}" if slow else ""),
+        f"{n_wifi} Wi-Fi clients, {n_wired} wired · SSH {session[1]} · {len(output)} B"
+        + (f" · slow: {', '.join(slow)}" if slow else "")))
     return parsed
 
 
@@ -350,7 +378,8 @@ def _ha_trackers():
             return json.loads(r.text), "template", len(r.content), None
         except (ValueError, requests.HTTPError) as exc:
             _template_ok = False  # template not supported/valid: falling back to /api/states
-            log.warning("Home Assistant: template unusable (%s), falling back to /api/states", exc)
+            log.warning(L("Home Assistant: template non utilizzabile (%s), uso /api/states",
+                          "Home Assistant: template unusable (%s), falling back to /api/states"), exc)
     r = HA.get(f"{CFG['ha_url']}/api/states", headers=headers, timeout=12, verify=CFG["ha_verify"])
     r.raise_for_status()
     states = r.json()
@@ -360,7 +389,7 @@ def _ha_trackers():
 
 def fetch_home_assistant():
     if not CFG["ha_url"] or not CFG["ha_token"]:
-        raise RuntimeError("Configure HA_URL and HA_TOKEN in the .env file to read the AX55 from Home Assistant.")
+        raise RuntimeError("Set HA_URL and HA_TOKEN in the .env file to read the router from Home Assistant.")
     devices = []
     entities, mode, size, total = _ha_trackers()
     for entity in entities:
@@ -378,10 +407,14 @@ def fetch_home_assistant():
             ap_name=str(attrs.get("ap_name") or "").lstrip("* "), signal=attrs.get("signal"),
             active=entity.get("state") == "home", tx=_ha_rate_mbps(attrs.get("tx_rate")),
             rx=_ha_rate_mbps(attrs.get("rx_rate")), ssid=attrs.get("ssid") or ""))
-    detail = (f"{len(entities)} trackers received, {len(devices)} valid · template · {size / 1024:.0f} KB"
+    kb = f"{size / 1024:.0f}"
+    detail = (msg(f"{len(entities)} tracker ricevuti, {len(devices)} validi · template · {kb} KB",
+                  f"{len(entities)} trackers received, {len(devices)} valid · template · {kb} KB")
               if total is None else
-              f"{len(entities)} trackers out of {total} entities downloaded · {size / 1024:.0f} KB (template not available)")
-    return dict(fw="TP-Link AX55 · data from Home Assistant", devices=devices, meta=dict(detail=detail))
+              msg(f"{len(entities)} tracker su {total} entità scaricate · {kb} KB (template non disponibile)",
+                  f"{len(entities)} trackers out of {total} entities downloaded · {kb} KB (template unavailable)"))
+    return dict(fw=msg("TP-Link AX55 · dati da Home Assistant", "TP-Link AX55 · data from Home Assistant"),
+                devices=devices, meta=dict(detail=detail))
 
 
 # ───────────────────────────── Names / labels ───────────────────────────
@@ -407,7 +440,8 @@ def _read_map(path, strict=False):
             raise  # Whoever rewrites the file must never start from broken content.
         message = f"{type(exc).__name__}: {exc}"
         if CONFIG_ERRORS.get(name) != message:
-            log.warning("%s is unreadable (%s): using the last valid version", name, message)
+            log.warning(L("%s non leggibile (%s): uso l'ultima versione valida", "%s unreadable (%s): using the last valid version"),
+                        name, message)
         CONFIG_ERRORS[name] = message
         return dict(_GOOD.get(path, {}))
     CONFIG_ERRORS.pop(name, None)
@@ -496,7 +530,8 @@ def build(router, opal, names, meta=None):
             promoted = not item["connected"] and entry["connected"]
             if promoted:
                 item.update(group="opal_wired", connected=True, rssi=None, tx=None, rx=None, ssid="",
-                            ap_name="GL.iNet Opal", connection="behind the Opal", via="behind the Opal",
+                            ap_name="GL.iNet Opal", connection=msg("dietro l'Opal", "behind the Opal"),
+                            via=msg("dietro l'Opal", "behind the Opal"),
                             ip=item["ip"] or entry["ip"], name=item["name"] or entry["name"])
             aliases.append(dict(real=real, via=mac, ip=entry["ip"], name=item["name"] or entry["name"],
                                 promoted=promoted))
@@ -523,7 +558,8 @@ def build(router, opal, names, meta=None):
             by_ip.setdefault(d["ip"], []).append(d["name"])
     for ip, owners in by_ip.items():
         if len(owners) > 1:
-            alerts.append(dict(level="bad", kind="conflict", text=f"IP conflict {ip}: {', '.join(owners)}"))
+            alerts.append(dict(level="bad", kind="conflict", text=msg(f"Conflitto IP {ip}: {', '.join(owners)}",
+                                                                      f"IP conflict {ip}: {', '.join(owners)}")))
     weak = {}
     for d in live:
         if d["rssi"] is not None and d["rssi"] <= CFG["rssi_warn"]:
@@ -531,12 +567,15 @@ def build(router, opal, names, meta=None):
     for (room, where), items in weak.items():
         if room and len(items) >= 2:  # multiple weak devices in the same room: single warning, likely a coverage issue
             detail = ", ".join(f"{d['name']} ({d['rssi']} dBm)" for d in items)
-            alerts.append(dict(level="warn", kind="weak", room=room, text=f"Weak signal in {room} on {where}: {detail}"))
+            alerts.append(dict(level="warn", kind="weak", room=room,
+                               text=msg(f"Segnale debole in {room} su {where}: {detail}",
+                                        f"Weak signal in {room} on {where}: {detail}")))
         else:
             for d in items:
                 place = f" · {d['room']}" if d["room"] else ""
                 alerts.append(dict(level="warn", kind="weak", mac=d["mac"], room=d["room"],
-                                   text=f"{d['name']}{place} has a weak signal on {where} ({d['rssi']} dBm)"))
+                                   text=msg(f"{d['name']}{place} ha segnale debole su {where} ({d['rssi']} dBm)",
+                                            f"{d['name']}{place} has a weak signal on {where} ({d['rssi']} dBm)")))
 
     opal_out = None
     if opal:
@@ -547,17 +586,20 @@ def build(router, opal, names, meta=None):
         if via:  # most reliable source: what the AX55/OneMesh reports for the Opal wlan-sta0 MAC
             uplink = via
             if CFG["uplink_expected"] and CFG["uplink_expected"].lower() not in via.lower():
-                alerts.append(dict(level="warn", kind="uplink", text=f"The Opal is connected to «{via}» instead of "
-                                                                    f"«{CFG['uplink_expected']}»"))
+                alerts.append(dict(level="warn", kind="uplink", text=msg(
+                    f"L'Opal risulta agganciato a «{via}» invece di «{CFG['uplink_expected']}»",
+                    f"The Opal is attached to «{via}» instead of «{CFG['uplink_expected']}»")))
         elif bssid and bssid != own:  # if BSSID matches the Opal MAC the driver doesn't really report it
             mid = bssid[3:14]
             uplink = ("AX55" if any(m[3:14] == mid for m in CFG["ax_macs"]) else
                       "RE700X" if any(m[3:14] == mid for m in CFG["re_macs"]) else "other AP")
             if uplink in ("RE700X", "other AP"):
-                alerts.append(dict(level="warn", kind="uplink",
-                                   text=f"The Opal is connected to {bssid} ({uplink}), not the primary router"))
+                alerts.append(dict(level="warn", kind="uplink", text=msg(
+                    f"L'Opal è agganciato a {bssid} ({uplink}), non al router principale",
+                    f"The Opal is attached to {bssid} ({uplink}), not to the main router")))
         if sta.get("signal") is not None and sta["signal"] <= CFG["uplink_warn"]:
-            alerts.append(dict(level="warn", kind="uplink", text=f"Opal uplink signal weak ({sta['signal']} dBm)"))
+            alerts.append(dict(level="warn", kind="uplink", text=msg(f"Uplink dell'Opal debole ({sta['signal']} dBm)",
+                                                                     f"Opal uplink is weak ({sta['signal']} dBm)")))
         snr = sta["signal"] - sta["noise"] if sta.get("signal") is not None and sta.get("noise") is not None else None
         opal_out = dict(ap=opal["ap"], sta=sta, uplink=uplink, own_mac=own, snr=snr)
     return dict(router=dict(fw=router.get("fw")), opal=opal_out, devices=devices, alerts=alerts,
@@ -616,18 +658,21 @@ def track_seen(data, now):
                 last = now
                 upserts.append((d["mac"], first, last))
                 if first and now - first < CFG["new_hours"] * 3600 and not d["named"]:
-                    guess = f"probably {TYPES[d['kind']]}" if d["kind"] else "unknown type"
+                    where = d["ip"] or d["mac"]
+                    guess = (f"probabile {TYPES[d['kind']]['it']}", f"probably {TYPES[d['kind']]['en']}") if d["kind"] \
+                        else ("tipo sconosciuto", "unknown type")
                     data["alerts"].append(dict(level="info" if d["kind"] else "warn", kind="new", mac=d["mac"],
-                                               text=f"New device on the network: {d['name']} "
-                                                    f"({d['ip'] or d['mac']}) · {guess}"))
+                                               text=msg(f"Nuovo dispositivo sulla rete: {d['name']} ({where}) · {guess[0]}",
+                                                        f"New device on the network: {d['name']} ({where}) · {guess[1]}")))
             d["last_seen"] = last
         db.executemany("INSERT INTO seen VALUES(?,?,?) ON CONFLICT(mac) DO UPDATE SET last_seen=excluded.last_seen",
                        upserts)
     offline_alerts(data, now)
 
 
-def _duration(minutes):
-    return f"{minutes} min" if minutes < 120 else f"{minutes // 60} h" if minutes < 2880 else f"{minutes // 1440} d"
+def _duration(minutes, lang="en"):
+    day = "g" if lang == "it" else "d"
+    return f"{minutes} min" if minutes < 120 else f"{minutes // 60} h" if minutes < 2880 else f"{minutes // 1440} {day}"
 
 
 def offline_alerts(data, now):
@@ -643,10 +688,13 @@ def offline_alerts(data, now):
                 current.add(d["mac"])
                 data["alerts"].append(dict(level="bad" if d["kind"] == "rete" else "warn", kind="offline",
                                            mac=d["mac"], room=d["room"],
-                                           text=f"{d['name']}{place} has been offline for {_duration(minutes)} "
-                                                f"({TYPES[d['kind']]})"))
+                                           text=msg(f"{d['name']}{place} è offline da {_duration(minutes, 'it')} "
+                                                    f"({TYPES[d['kind']]['it']})",
+                                                    f"{d['name']}{place} has been offline for {_duration(minutes)} "
+                                                    f"({TYPES[d['kind']]['en']})")))
                 if d["mac"] not in OFFLINE_ALERTED:
-                    log.warning("Offline: %s%s for %s (%s)", d["name"], place, _duration(minutes), TYPES[d["kind"]])
+                    log.warning(L("Offline: %s%s da %s (%s)", "Offline: %s%s for %s (%s)"), d["name"], place,
+                                _duration(minutes, LOG_LANG), TYPES[d["kind"]])
     OFFLINE_ALERTED.intersection_update(current)
     OFFLINE_ALERTED.update(current)
 
@@ -655,7 +703,8 @@ def db_stats():
     with dbx() as db:
         rows = db.execute("SELECT COUNT(*) FROM samples").fetchone()[0]
     size = sum(os.path.getsize(p) for p in (CFG["db"], CFG["db"] + "-wal") if os.path.exists(p))
-    HEALTH["db"]["detail"] = f"{rows:,} samples · {size / 1e6:.1f} MB".replace(",", ".")
+    mb = f"{size / 1e6:.1f}"
+    HEALTH["db"]["detail"] = msg(f"{rows:,} campioni · {mb} MB".replace(",", "."), f"{rows:,} samples · {mb} MB")
     return rows, size
 
 
@@ -671,7 +720,8 @@ def prune():
         finally:
             con.close()
     rows, size = db_stats()
-    log.info("DB cleanup: deleted %d samples older than %d days · %d samples remaining, %.1f MB",
+    log.info(L("Pulizia DB: eliminati %d campioni più vecchi di %d giorni · restano %d campioni, %.1f MB",
+               "DB cleanup: deleted %d samples older than %d days · %d samples left, %.1f MB"),
              deleted, CFG["retention_days"], rows, size / 1e6)
 
 
@@ -696,14 +746,16 @@ def _take(future, key, errors, stale):
         health.update(ok=False, duration=getattr(exc, "elapsed", None), last_error=message, fails=health["fails"] + 1)
         errors[health["label"]] = message
         if health["fails"] == 1 or health["fails"] % 20 == 0:  # no flood of duplicate log lines
-            log.warning("%s: ERROR · %s (attempt #%d)", health["label"], message, health["fails"])
-        log.debug("Error details %s", health["label"], exc_info=True)
+            log.warning(L("%s: ERRORE · %s (tentativo n. %d)", "%s: ERROR · %s (attempt #%d)"),
+                        health["label"], message, health["fails"])
+        log.debug(L("Dettaglio errore %s", "Error details %s"), health["label"], exc_info=True)
         if key in LAST and now - LAST[key][0] < 600:  # keep last good data for up to 10 minutes
             stale[key] = int(now - LAST[key][0])
             return LAST[key][1]
         return None
     if health["fails"]:
-        log.info("%s: recovered after %d consecutive errors", health["label"], health["fails"])
+        log.info(L("%s: ripristinato dopo %d errori consecutivi", "%s: recovered after %d consecutive errors"),
+                 health["label"], health["fails"])
     health.update(ok=True, last_ok=now, duration=round(elapsed, 2), fails=0, last_error=None,
                   detail=(value.get("meta") or {}).get("detail", ""))
     LAST[key] = (now, value)
@@ -747,30 +799,34 @@ def log_changes(prev, data, events):
 
     def fmt(items):
         names = [e[2] or e[1] for e in items]
-        return ", ".join(names[:8]) + (f" (+{len(names) - 8} others)" if len(names) > 8 else "")
+        return ", ".join(names[:8]) + (L(f" (+{len(names) - 8} altri)", f" (+{len(names) - 8} more)") if len(names) > 8 else "")
 
     joined, left = [e for e in events if e[3] == "connect"], [e for e in events if e[3] == "disconnect"]
     if joined or left:
-        log.info("Devices · connected: %s · disconnected: %s", fmt(joined) or "—", fmt(left) or "—")
+        log.info(L("Dispositivi · connessi: %s · disconnessi: %s", "Devices · connected: %s · disconnected: %s"),
+                 fmt(joined) or "—", fmt(left) or "—")
     for e in events:
         if e[3] in ("move_ap", "move_band"):
-            log.info("%s: %s from «%s» to «%s»", "AP change" if e[3] == "move_ap" else "Band/network change",
+            log.info(L("%s: %s da «%s» a «%s»", "%s: %s from «%s» to «%s»"),
+                     L("Cambio AP", "AP change") if e[3] == "move_ap" else L("Cambio banda/rete", "Band/network change"),
                      e[2] or e[1], e[4], e[5])
     old, new = (prev.get("opal") or {}).get("sta", {}), (data.get("opal") or {}).get("sta", {})
     old_up, new_up = (prev.get("opal") or {}).get("uplink"), (data.get("opal") or {}).get("uplink")
     if old_up and new_up and old_up != new_up:
-        log.warning("Opal uplink changed: %s → %s", old_up, new_up)
+        log.warning(L("Uplink Opal cambiato: %s → %s", "Opal uplink changed: %s → %s"), old_up, new_up)
     elif old.get("bssid") and new.get("bssid") and old["bssid"] != new["bssid"]:
-        log.warning("Opal uplink BSSID changed: %s → %s", old["bssid"], new["bssid"])
+        log.warning(L("BSSID dell'uplink Opal cambiato: %s → %s", "Opal uplink BSSID changed: %s → %s"),
+                    old["bssid"], new["bssid"])
 
 
 def _source_summary(key, name):
     h = HEALTH[key]
     if h["ok"] is None:
-        return f"{name} disabled"
+        return f"{name} " + L("disattivato", "disabled")
     if h["ok"]:
         return f"{name} ok {h['duration']:.2f} s" + (f" ({h['detail']})" if h["detail"] else "")
-    return f"{name} ERROR" + (f" after {h['duration']:.1f} s" if h["duration"] is not None else "")
+    return f"{name} " + L("ERRORE", "ERROR") + (L(f" dopo {h['duration']:.1f} s", f" after {h['duration']:.1f} s")
+                                                 if h["duration"] is not None else "")
 
 
 def collect():
@@ -784,7 +840,8 @@ def collect():
         router = _take(f_router, "router", errors, stale)
         opal = _take(f_opal, "opal", errors, stale) if f_opal else None
         if not opal_on:
-            HEALTH["opal"].update(ok=None, detail="disabled (OPAL_HOST not set)")
+            HEALTH["opal"].update(ok=None, detail=msg("disattivato (OPAL_HOST non impostato)",
+                                                      "disabled (OPAL_HOST not set)"))
     now = round(time.time(), 3)
     data = build(router or dict(fw=None, devices=[]), opal, read_names(), read_meta())
     errors.update(CONFIG_ERRORS)
@@ -794,8 +851,10 @@ def collect():
         key = (a["real"], a["via"], a["promoted"])
         if key not in ALIAS_LOGGED:
             ALIAS_LOGGED.add(key)
-            log.info("Alias AX55↔Opal: %s (%s) seen through AX55 with the Opal MAC %s%s", a["name"] or a["real"],
-                     a["ip"], a["via"], " → treated as ONLINE behind the Opal" if a["promoted"] else "")
+            log.info(L("Alias AX55↔Opal: %s (%s) è visto dall'AX55 con il MAC dell'Opal %s%s",
+                       "AX55↔Opal alias: %s (%s) is seen by the AX55 with the Opal's MAC %s%s"),
+                     a["name"] or a["real"], a["ip"], a["via"],
+                     L(" → considerato ONLINE dietro l'Opal", " → treated as ONLINE behind the Opal") if a["promoted"] else "")
     events = detect_events(STATE["data"], data, now)
     saved, db = 0, HEALTH["db"]
     db["last_try"] = now
@@ -808,7 +867,7 @@ def collect():
             errors["database"] = message
             db.update(ok=False, last_error=message, fails=db["fails"] + 1)
             if db["fails"] == 1 or db["fails"] % 20 == 0:
-                log.warning("Database: ERROR · %s", message)
+                log.warning(L("Database: ERRORE · %s", "Database: ERROR · %s"), message)
     if "database" not in errors:
         db.update(ok=True, last_ok=now, fails=0, last_error=None)
     log_changes(STATE["data"], data, events)
@@ -818,7 +877,8 @@ def collect():
         STATE = dict(ts=now, errors=errors, data=data,
                      health=dict(cycle=META["seq"], poll=CFG["poll"], started=STARTED, sources=copy.deepcopy(HEALTH)))
         COND.notify_all()
-    log.info("Cycle %d · %s · %s · %d/%d connected · +%d samples · %.2f s total", META["seq"],
+    log.info(L("Ciclo %d · %s · %s · %d/%d connessi · +%d campioni · %.2f s totali",
+               "Cycle %d · %s · %s · %d/%d connected · +%d samples · %.2f s total"), META["seq"],
              _source_summary("router", "HA"), _source_summary("opal", "Opal"), live, len(data["devices"]),
              saved, time.perf_counter() - started)
 
@@ -829,7 +889,7 @@ def poll_loop():
         init_db()
     except Exception as exc:
         STATE = dict(STATE, errors={"database": f"{type(exc).__name__}: {exc}"})
-        log.error("Database cannot be initialized: %s", exc)
+        log.error(L("Database non inizializzabile: %s", "Cannot initialize the database: %s"), exc)
     last_prune = 0
     while True:
         cycle_start = time.monotonic()
@@ -840,7 +900,7 @@ def poll_loop():
                 last_prune = time.time()
         except Exception as exc:
             STATE = dict(STATE, errors={"collector": f"{type(exc).__name__}: {exc}"})
-            log.exception("Unexpected error during the collection cycle")
+            log.exception(L("Errore imprevisto nel ciclo di raccolta", "Unexpected error in the collection cycle"))
         WAKE.wait(max(1.0, CFG["poll"] - (time.monotonic() - cycle_start)))  # fixed cadence, not poll + duration
         WAKE.clear()
 
@@ -850,11 +910,15 @@ def start_worker():
     if not _started:
         _started = True
         setup_logging()
-        opal = (f"Opal {CFG['opal_user']}@{CFG['opal_host']}:{CFG['opal_port']} (AP {CFG['ap_if']}, uplink "
-                f"{CFG['sta_if']}, LAN ports {','.join(CFG['lan_ifs']) or '—'})") if CFG["opal_host"] else "Opal disabled"
-        log.info("Start · every %d s · HA %s · %s · DB %s (%d d) · auth %s · log %s", CFG["poll"],
-                 CFG["ha_url"] or "NOT CONFIGURED", opal, CFG["db"], CFG["retention_days"],
-                 "on" if CFG["auth_user"] else "off", logging.getLevelName(log.level))
+        lan = ",".join(CFG["lan_ifs"]) or "—"
+        opal = (f"Opal {CFG['opal_user']}@{CFG['opal_host']}:{CFG['opal_port']} "
+                + L(f"(AP {CFG['ap_if']}, uplink {CFG['sta_if']}, porte LAN {lan})",
+                    f"(AP {CFG['ap_if']}, uplink {CFG['sta_if']}, LAN ports {lan})")) if CFG["opal_host"] \
+            else L("Opal disattivato", "Opal disabled")
+        log.info(L("Avvio · ogni %d s · HA %s · %s · DB %s (%d g) · auth %s · log %s",
+                   "Start · every %d s · HA %s · %s · DB %s (%d d) · auth %s · log %s"), CFG["poll"],
+                 CFG["ha_url"] or L("NON CONFIGURATO", "NOT CONFIGURED"), opal, CFG["db"], CFG["retention_days"],
+                 L("attiva", "on") if CFG["auth_user"] else L("disattiva", "off"), logging.getLevelName(log.level))
         threading.Thread(target=poll_loop, daemon=True, name="network-poller").start()
 
 
@@ -867,7 +931,7 @@ def guard():
         ok = auth and hmac.compare_digest((auth.username or "").encode(), CFG["auth_user"].encode()) \
             and hmac.compare_digest((auth.password or "").encode(), CFG["auth_pass"].encode())
         if not ok:
-            return Response("Authentication required", 401, {"WWW-Authenticate": 'Basic realm="Network map"'})
+            return Response("Authentication required", 401, {"WWW-Authenticate": 'Basic realm="Netmap"'})
     # Custom header prevents third-party pages from writing/updating the dashboard (CSRF).
     if request.method in ("POST", "PATCH", "PUT", "DELETE") and request.headers.get("X-Requested-With") != "dashboard":
         return jsonify(error="Invalid request"), 400
@@ -889,7 +953,7 @@ def api_data():
 
 @app.get("/api/health")
 def api_health():
-    """200 if everything is fine, 503 otherwise: designed for Uptime Kuma or other monitoring tools."""
+    """200 if everything is fine, 503 otherwise: meant for Uptime Kuma and other monitors."""
     state, now = STATE, time.time()
     if not state["ts"]:
         return jsonify(status="starting"), 503
@@ -902,7 +966,7 @@ def api_health():
 
 @app.get("/api/events")
 def api_events():
-    """AP/band changes, connections, and disconnections. ?mac= filters a device, ?hours= sets the time range."""
+    """AP/band changes, connections and disconnections. ?mac= filters one device, ?hours= the range."""
     try:
         hours = min(CFG["retention_days"] * 24, max(1, int(request.args.get("hours", "24"))))
     except ValueError:
@@ -968,7 +1032,7 @@ def api_name(mac):
         try:
             names = read_names(strict=True)
         except (OSError, ValueError) as exc:
-            return jsonify(error=f"names.json is unreadable: {exc}"), 500
+            return jsonify(error=f"names.json unreadable: {exc}"), 500
         if name:
             names[mac] = name
         else:
@@ -992,7 +1056,7 @@ def api_meta(mac):
         try:
             meta = read_meta(strict=True)
         except (OSError, ValueError) as exc:
-            return jsonify(error=f"meta.json is unreadable: {exc}"), 500
+            return jsonify(error=f"meta.json unreadable: {exc}"), 500
         entry = {k: v for k, v in (("type", kind), ("room", room)) if v}
         if entry:
             meta[mac] = entry
@@ -1011,7 +1075,7 @@ def api_apply_suggestions():
         try:
             meta = read_meta(strict=True)
         except (OSError, ValueError) as exc:
-            return jsonify(error=f"meta.json is unreadable: {exc}"), 500
+            return jsonify(error=f"meta.json unreadable: {exc}"), 500
         applied = 0
         for d in devices:
             entry = dict(meta.get(d["mac"]) or {})

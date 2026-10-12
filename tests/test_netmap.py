@@ -37,7 +37,7 @@ def test_alias_promotes_device_seen_behind_opal(A):
                                    tracker(alias, "Purificatore", "192.0.2.220")])
     data = A.build(router, A.parse_opal(OPAL_OUTPUT), {})
     by_mac = {d["mac"]: d for d in data["devices"]}
-    assert by_mac[real]["connected"] and by_mac[real]["group"] == "opal_wired" and by_mac[real]["via"] == "behind the Opal"
+    assert by_mac[real]["connected"] and by_mac[real]["group"] == "opal_wired" and by_mac[real]["via"]["en"] == "behind the Opal"
     assert alias not in by_mac and not any(a["kind"] == "conflict" for a in data["alerts"] if "kind" in a)
 
 
@@ -60,8 +60,8 @@ def test_uplink_unknown_when_driver_echoes_own_mac_and_router_view_is_used(A):
     assert data["opal"]["uplink"] == "unknown" and not any(a.get("kind") == "uplink" for a in data["alerts"])
     on_extender = tracker("6e:00:00:00:00:08", "Opal", ap="Ext", conn="HOST_5G")
     data = A.build(dict(fw="x", devices=[on_extender]), parsed, {})
-    assert data["opal"]["uplink"] == "Ext" or any("Ext" in a["text"] for a in data["alerts"])
-    assert any(a["kind"] == "uplink" and "Main" in a["text"] for a in data["alerts"])
+    assert data["opal"]["uplink"] == "Ext" or any("Ext" in a["text"]["en"] for a in data["alerts"])
+    assert any(a["kind"] == "uplink" and "Main" in a["text"]["en"] for a in data["alerts"])
 
 
 # ───────────── roaming and events
@@ -95,7 +95,7 @@ def test_weak_signal_alerts_are_grouped_by_room(A):
     meta = {"10:00:00:00:00:01": {"room": "Cucina"}, "10:00:00:00:00:02": {"room": "Cucina"},
             "10:00:00:00:00:03": {"room": "Camera"}}
     devices = [tracker(f"10:00:00:00:00:0{i}", f"Dev{i}", signal=-80) for i in (1, 2, 3)]
-    alerts = [a["text"] for a in A.build(dict(fw="x", devices=devices), None, {}, meta)["alerts"]]
+    alerts = [a["text"]["en"] for a in A.build(dict(fw="x", devices=devices), None, {}, meta)["alerts"]]
     assert any(t.startswith("Weak signal in Cucina") and "Dev1" in t and "Dev2" in t for t in alerts)
     assert any("Dev3 · Camera has a weak signal" in t for t in alerts)
 
@@ -107,13 +107,15 @@ def test_new_device_and_offline_alerts(A, cycle, monkeypatch):
     monkeypatch.setitem(A.CFG, "offline_types", ["camera"])
     data = cycle(base + [tracker(cam, "Telecamera cucina", "192.168.1.9"), tracker(mystery, "gadget", "192.168.1.10")])
     new = {a["mac"]: a for a in data["alerts"] if a.get("kind") == "new"}
-    assert new[cam]["level"] == "info" and "probably Telecamera" in new[cam]["text"]
-    assert new[mystery]["level"] == "warn" and "unknown type" in new[mystery]["text"]
+    assert new[cam]["level"] == "info" and "probably Camera / doorbell" in new[cam]["text"]["en"]
+    assert "probabile Telecamera" in new[cam]["text"]["it"]
+    assert new[mystery]["level"] == "warn" and "unknown type" in new[mystery]["text"]["en"]
     with A.dbx() as db:                                                          # the camera was last seen 15 minutes ago
         db.execute("UPDATE seen SET last_seen = last_seen - 900 WHERE mac = ?", (cam,))
     data = cycle(base + [tracker(cam, "Telecamera cucina", "192.168.1.9", active=False)])
     offline = [a for a in data["alerts"] if a.get("kind") == "offline"]
-    assert len(offline) == 1 and "offline for 15 min" in offline[0]["text"]
+    assert len(offline) == 1 and "offline for 15 min" in offline[0]["text"]["en"]
+    assert "offline da 15 min" in offline[0]["text"]["it"]
     data = cycle(base + [tracker(cam, "Telecamera cucina", "192.168.1.9", active=False)], router_ok=False)
     assert not any(a.get("kind") == "offline" for a in data["alerts"])           # failing source: no false alerts
 
@@ -148,9 +150,11 @@ def test_stale_data_kept_and_health_endpoint(A, cycle):
     assert "router" in data["stale"] and len(data["devices"]) == 1                 # last good data
     assert "Home Assistant · AX55" in A.STATE["errors"]
     client = A.app.test_client()
-    assert client.get("/api/health").status_code == 503
+    bad = client.get("/api/health")
+    assert bad.status_code == 503 and bad.get_json()["status"] == "degraded" and bad.get_json()["failing"] == ["router"]
     cycle([tracker("10:00:00:00:00:01", "Telefono")])
-    assert client.get("/api/health").status_code == 200
+    good = client.get("/api/health")
+    assert good.status_code == 200 and set(good.get_json()) == {"status", "failing", "last_cycle_age_s", "cycles"}
 
 
 def test_opal_is_optional(A, cycle, monkeypatch):
@@ -198,3 +202,30 @@ def test_invalid_json_keeps_last_good_labels_and_is_reported(A, cycle):
     with open(A.CFG["names"], "w", encoding="utf-8") as f:
         f.write('{"10:00:00:00:00:01": "Lampada nuova"}')
     assert cycle([tracker(mac, "host")])["devices"][0]["name"] == "Lampada nuova" and "names.json" not in A.STATE["errors"]
+
+
+# ───────────── two languages
+def test_every_message_for_the_page_exists_in_both_languages(A, cycle):
+    meta = {"10:00:00:00:00:01": {"room": "Kitchen"}, "10:00:00:00:00:02": {"room": "Kitchen"}}
+    A.CFG["offline_types"] = ["camera"]
+    devices = [tracker("10:00:00:00:00:01", "A", ip="192.168.1.5", signal=-80), tracker("10:00:00:00:00:02", "B", ip="192.168.1.5", signal=-80)]
+    data = A.build(dict(fw="x", devices=devices), opal(), {}, meta)
+    assert data["alerts"] and all(set(a["text"]) == {"it", "en"} for a in data["alerts"])
+    assert all(set(v) == {"it", "en"} for v in data["types"].values())
+    cycle([tracker("10:00:00:00:00:01", "A")])
+    A.prune()                                                         # refreshes the database detail
+    assert set(A.HEALTH["db"]["detail"]) == {"it", "en"} and "samples" in A.HEALTH["db"]["detail"]["en"]
+
+
+def test_disabled_opal_detail_is_bilingual(A, cycle, monkeypatch):
+    monkeypatch.setitem(A.CFG, "opal_host", "")
+    monkeypatch.setattr(A, "fetch_home_assistant", lambda: dict(fw="x", devices=[]))
+    A.collect()
+    detail = A.STATE["health"]["sources"]["opal"]["detail"]
+    assert detail["en"].startswith("disabled") and detail["it"].startswith("disattivato")
+
+
+def test_log_language_defaults_to_english_and_labels_are_neutral(A):
+    assert A.LOG_LANG == "en" and str(A.msg("ciao", "hello")) == "hello" and A.L("ciao", "hello") == "hello"
+    assert set(A.LABEL.values()) >= {"AX55 · wired", "Opal · wired", "undetermined"}   # neutral tokens, translated by the page
+    assert json.loads(json.dumps(A.msg("ciao", "hello"))) == {"it": "ciao", "en": "hello"}
