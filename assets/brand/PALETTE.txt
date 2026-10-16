@@ -1,0 +1,11 @@
+NETMAP — OFFICIAL PALETTE
+
+Navy / main text: #0B1F3B
+Blue / accent: #007BFF
+Cyan / connections: #00D1FF
+Green / active nodes: #00E676
+Light gray / surfaces: #E5EAF2
+Dark navy / dark backgrounds: #06172D
+
+Payoff: YOUR NETWORK, AT A GLANCE
+Recommended font: Inter Display (fallback: Inter, Lato, Arial, sans-serif)

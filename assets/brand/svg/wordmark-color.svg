@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="430" height="110" viewBox="0 0 430 110" role="img" aria-labelledby="title desc">
+<title id="title">Netmap</title><desc id="desc">Logo Netmap, rete domestica e dispositivi connessi</desc>
+<defs>
+  <linearGradient id="netmapGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+    <stop offset="0%" stop-color="#007BFF"/>
+    <stop offset="56%" stop-color="#00BDFB"/>
+    <stop offset="100%" stop-color="#00E676"/>
+  </linearGradient>
+  <linearGradient id="wordGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+    <stop offset="0%" stop-color="#00BDFB"/>
+    <stop offset="100%" stop-color="#007BFF"/>
+  </linearGradient>
+</defs>
+<text x="10" y="88" font-family="'Inter Display', Inter, 'Lato', Arial, sans-serif" font-size="80" font-weight="750" letter-spacing="-2.1"><tspan fill="#0B1F3B">Net</tspan><tspan fill="url(#wordGrad)">map</tspan></text>
+</svg>

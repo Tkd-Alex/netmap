@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+<title id="title">Netmap</title><desc id="desc">Logo Netmap, rete domestica e dispositivi connessi</desc>
+<defs>
+  <linearGradient id="netmapGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+    <stop offset="0%" stop-color="#007BFF"/>
+    <stop offset="56%" stop-color="#00BDFB"/>
+    <stop offset="100%" stop-color="#00E676"/>
+  </linearGradient>
+  <linearGradient id="wordGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+    <stop offset="0%" stop-color="#00BDFB"/>
+    <stop offset="100%" stop-color="#007BFF"/>
+  </linearGradient>
+</defs>
+<rect width="64" height="64" rx="13" fill="#06172D"/><g transform="translate(5,5) scale(0.54)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M25 27 V73 M25 27 L75 73 M75 27 V73" stroke="url(#netmapGrad)" stroke-width="9.5"/>
+      <g stroke="none"><circle cx="25" cy="27" r="9" fill="#007BFF"/><circle cx="25" cy="73" r="9" fill="#007BFF"/><circle cx="75" cy="73" r="9" fill="#007BFF"/><circle cx="75" cy="27" r="9" fill="#00E676"/></g>
+    </g>
+</svg>
