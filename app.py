@@ -92,6 +92,7 @@ CFG = dict(
     ax_macs=[norm_mac(x) for x in _list("AX55_MAC")],
     re_macs=[norm_mac(x) for x in _list("RE700X_MAC")],
     poll=max(10, int(os.getenv("POLL_SECONDS", "30"))),
+    opal_missing_grace=max(0, int(os.getenv("OPAL_MISSING_GRACE_SECONDS", "120"))),
     names=os.getenv("NAMES_FILE", str(ROOT / "names.json")),
     meta=os.getenv("META_FILE", str(ROOT / "meta.json")),  # type and room per device
     db=os.getenv("DB_PATH", str(ROOT / "network.db")),
@@ -190,6 +191,7 @@ WAKE = threading.Event()
 ALIAS_LOGGED = set()
 OFFLINE_ALERTED = set()
 LAST = {}  # latest valid result for source: {"router": (ts, data), "opal": (ts, data)}
+OPAL_MISSING_SINCE = {}  # Opal MACs temporarily absent from radio sources
 NAMES_LOCK = threading.Lock()
 META_LOCK = threading.Lock()
 _started = False
@@ -300,18 +302,35 @@ def parse_opal(output):
         for m in re.finditer(r"^\s*(\d+)\s+([0-9a-fA-F:]{17})\s+(yes|no)\b", fdb, re.M):  # `brctl showmacs`
             if m.group(3) == "no" and ports.get(int(m.group(1))) in CFG["lan_ifs"]:
                 wired.add(norm_mac(m.group(2)))
+    hostapd_clients = {}
+    hostapd_ok = False
+    try:
+        raw_clients = json.loads(parts.get("HOSTAPD", ""))
+        if isinstance(raw_clients, dict):
+            hostapd_ok = True
+            for raw_mac, details in raw_clients.items():
+                if not isinstance(details, dict) or details.get("assoc") is not True or details.get("authorized") is not True:
+                    continue
+                mac = norm_mac(raw_mac)
+                if mac and mac != "00:00:00:00:00:00":
+                    hostapd_clients[mac] = dict(rssi=None, idle_ms=None, ip=neighbors.get(mac), tx=None, rx=None)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
     ap_info, own = _iw_info(parts.get("AP")), norm_mac(parts.get("MAC", "").strip())
     local = {norm_mac(m) for m in re.findall(r"[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}", parts.get("LOCAL", ""))}
     local |= {own, norm_mac(ap_info.get("bssid") or "")}
     local -= {"00:00:00:00:00:00", ""}
-    return dict(ap=ap_info, sta=_iw_info(parts.get("STA")), clients=clients, local_macs=sorted(local),
-                neigh=neighbors, neigh_state=neigh_state, wired=sorted(wired), own_mac=own)
+    return dict(ap=ap_info, sta=_iw_info(parts.get("STA")), clients=clients, hostapd_clients=hostapd_clients,
+                hostapd_ok=hostapd_ok, local_macs=sorted(local), neigh=neighbors, neigh_state=neigh_state,
+                wired=sorted(wired), own_mac=own)
 
 
 def fetch_opal():
     ap, sta = CFG["ap_if"], CFG["sta_if"]
-    sections = [("AP", f"iwinfo {ap} info"), ("ASSOC", f"iwinfo {ap} assoclist"), ("STA", f"iwinfo {sta} info"),
-                ("MAC", f"cat /sys/class/net/{sta}/address"), ("NEIGH", "ip neigh show; echo; echo '##LOCAL'; cat /sys/class/net/*/address 2>/dev/null")]
+    sections = [("AP", f"iwinfo {ap} info"), ("ASSOC", f"iwinfo {ap} assoclist"),
+                ("HOSTAPD", f"ubus call hostapd.{ap} get_clients 2>/dev/null"),
+                ("STA", f"iwinfo {sta} info"), ("MAC", f"cat /sys/class/net/{sta}/address"),
+                ("NEIGH", "ip neigh show; echo; echo '##LOCAL'; cat /sys/class/net/*/address 2>/dev/null")]
     if CFG["lan_ifs"]:
         br = CFG["bridge"]
         sections += [("FDB", f"bridge fdb show 2>/dev/null || brctl showmacs {br} 2>/dev/null"),
@@ -323,7 +342,7 @@ def fetch_opal():
     ranked = sorted(timings.items(), key=lambda kv: -kv[1])
     slow = [f"{n} {t:.2f} s" for n, t in (ranked[:2] if sum(timings.values()) >= 2 else
                                            [kv for kv in ranked if kv[1] >= 1])]
-    n_wifi, n_wired = len(parsed["clients"]), len(parsed["wired"])
+    n_wifi, n_wired = len(set(parsed["clients"]) | set(parsed["hostapd_clients"])), len(parsed["wired"])
     session = ("nuova", "new") if OPAL.new_session else ("riusata", "reused")
     parsed["meta"] = dict(detail=msg(
         f"{n_wifi} client Wi-Fi, {n_wired} cavo · SSH {session[0]} · {len(output)} B"
@@ -485,7 +504,9 @@ def node_of(d):
     return "AX55"
 
 
-def build(router, opal, names, meta=None):
+def build(router, opal, names, meta=None, previous=None, now=None, allow_opal_grace=True):
+    now = time.time() if now is None else now
+    previous_devices = {d["mac"]: d for d in (previous or {}).get("devices", [])}
     table = {}
 
     def row(mac):
@@ -501,12 +522,14 @@ def build(router, opal, names, meta=None):
     own, opal_view, aliases = None, None, []
     if opal:
         own, essid = opal["own_mac"], opal["ap"].get("essid") or ""
-        for mac, client in opal["clients"].items():
+        wifi_clients = dict(opal.get("hostapd_clients", {}))
+        wifi_clients.update(opal.get("clients", {}))  # iwinfo adds RSSI/traffic when available
+        for mac, client in wifi_clients.items():
             item = row(mac)
-            item.update(group="opal", rssi=client["rssi"], connected=True, ssid=essid, ap_name="GL.iNet Opal",
-                        connection="Wi-Fi 2.4 GHz", ip=item["ip"] or client["ip"],
-                        tx=client["tx"] if client["tx"] is not None else item["tx"],
-                        rx=client["rx"] if client["rx"] is not None else item["rx"])
+            item.update(group="opal", rssi=client.get("rssi"), connected=True, ssid=essid, ap_name="GL.iNet Opal",
+                        connection="Wi-Fi 2.4 GHz", ip=item["ip"] or client.get("ip"),
+                        tx=client.get("tx") if client.get("tx") is not None else item["tx"],
+                        rx=client.get("rx") if client.get("rx") is not None else item["rx"])
         for mac in opal["wired"]:
             if mac in opal["clients"] or mac == own:
                 continue
@@ -535,6 +558,31 @@ def build(router, opal, names, meta=None):
                             ip=item["ip"] or entry["ip"], name=item["name"] or entry["name"])
             aliases.append(dict(real=real, via=mac, ip=entry["ip"], name=item["name"] or entry["name"],
                                 promoted=promoted))
+    # Avoid false disconnects when the driver omits an Opal client for some polls.
+    # The hostapd view is the primary source; grace covers short gaps in either view.
+    current_opal = {mac for mac, item in table.items() if item.get("connected") and item.get("group") == "opal"}
+    for mac, old in previous_devices.items():
+        if old.get("group") != "opal" or not old.get("connected"):
+            OPAL_MISSING_SINCE.pop(mac, None)
+            continue
+        if mac in current_opal:
+            OPAL_MISSING_SINCE.pop(mac, None)
+            continue
+        if not allow_opal_grace or not opal or CFG["opal_missing_grace"] <= 0:
+            OPAL_MISSING_SINCE.pop(mac, None)
+            continue
+        missing_since = OPAL_MISSING_SINCE.setdefault(mac, now)
+        if now - missing_since < CFG["opal_missing_grace"]:
+            item = row(mac)
+            # Keep the previous row without inventing new radio data.
+            for key in ("ip", "name", "group", "rssi", "tx", "rx", "connected", "ssid", "ap_name",
+                        "connection", "alias", "via"):
+                if key in old:
+                    item[key] = old[key]
+            item["connected"] = True
+        else:
+            OPAL_MISSING_SINCE.pop(mac, None)
+
     for mac, item in table.items():
         source = item["name"]
         item["named"] = bool(names.get(mac))  # name chosen by the user (names.json)
@@ -683,7 +731,8 @@ def offline_alerts(data, now):
             if d["connected"] or d["kind"] not in CFG["offline_types"] or not d.get("last_seen"):
                 continue
             minutes = int((now - d["last_seen"]) / 60)
-            if minutes >= CFG["offline_minutes"]:
+            # if minutes >= CFG["offline_minutes"]:
+            if CFG["offline_minutes"] <= minutes <= 2 * 1440:
                 place = f" · {d['room']}" if d["room"] else ""
                 current.add(d["mac"])
                 data["alerts"].append(dict(level="bad" if d["kind"] == "rete" else "warn", kind="offline",
@@ -749,7 +798,7 @@ def _take(future, key, errors, stale):
             log.warning(L("%s: ERRORE · %s (tentativo n. %d)", "%s: ERROR · %s (attempt #%d)"),
                         health["label"], message, health["fails"])
         log.debug(L("Dettaglio errore %s", "Error details %s"), health["label"], exc_info=True)
-        if key in LAST and now - LAST[key][0] < 600:  # keep last good data for up to 10 minutes
+        if key in LAST and now - LAST[key][0] < 600:  # keep the last valid data point for up to 10 minutes
             stale[key] = int(now - LAST[key][0])
             return LAST[key][1]
         return None
@@ -843,7 +892,9 @@ def collect():
             HEALTH["opal"].update(ok=None, detail=msg("disattivato (OPAL_HOST non impostato)",
                                                       "disabled (OPAL_HOST not set)"))
     now = round(time.time(), 3)
-    data = build(router or dict(fw=None, devices=[]), opal, read_names(), read_meta())
+    opal_fresh = opal is not None and "opal" not in stale
+    data = build(router or dict(fw=None, devices=[]), opal, read_names(), read_meta(),
+                 previous=STATE.get("data"), now=now, allow_opal_grace=opal_fresh)
     errors.update(CONFIG_ERRORS)
     data["stale"] = stale
     data["clean"] = router is not None and (opal is not None or not opal_on) and not stale  # fresh sources
@@ -1094,3 +1145,4 @@ if not os.getenv("DASH_NO_WORKER"):
 
 if __name__ == "__main__":
     app.run(host=os.getenv("HOST", "0.0.0.0"), port=int(os.getenv("PORT", "8080")), threaded=True)
+

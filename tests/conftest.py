@@ -18,7 +18,8 @@ def A(tmp_path, monkeypatch):
     monkeypatch.setitem(netmap.CFG, "names", str(tmp_path / "names.json"))
     monkeypatch.setitem(netmap.CFG, "meta", str(tmp_path / "meta.json"))
     monkeypatch.setattr(netmap, "STATE", {"ts": None, "errors": {}, "data": None, "health": None})
-    for container in (netmap.LAST, netmap.ALIAS_LOGGED, netmap.OFFLINE_ALERTED, netmap._GOOD, netmap.CONFIG_ERRORS):
+    for container in (netmap.LAST, netmap.ALIAS_LOGGED, netmap.OFFLINE_ALERTED, netmap._GOOD, netmap.CONFIG_ERRORS,
+                      netmap.OPAL_MISSING_SINCE):
         container.clear()
     netmap.init_db()
     return netmap

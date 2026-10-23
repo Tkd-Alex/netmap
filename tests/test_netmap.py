@@ -65,7 +65,8 @@ def test_uplink_unknown_when_driver_echoes_own_mac_and_router_view_is_used(A):
 
 
 # ───────────── roaming and events
-def test_events_roaming_and_guard_on_failing_sources(A, cycle):
+def test_events_roaming_and_guard_on_failing_sources(A, cycle, monkeypatch):
+    monkeypatch.setitem(A.CFG, "opal_missing_grace", 0)  # leaving the Opal is immediate (grace: see below)
     phone = "10:00:00:00:00:01"
     cycle([tracker(phone, "Telefono", conn="HOST_5G")])
     cycle([tracker(phone, "Telefono", conn="HOST_2G")])                                    # band change
@@ -80,7 +81,8 @@ def test_events_roaming_and_guard_on_failing_sources(A, cycle):
     assert rows[1][1:] == ("AX55 · 2.4 GHz", "Opal · 2.4 GHz") and rows[2][2] == "Ext · 5 GHz"
 
 
-def test_events_api_summary(A, cycle):
+def test_events_api_summary(A, cycle, monkeypatch):
+    monkeypatch.setitem(A.CFG, "opal_missing_grace", 0)  # leaving the Opal is immediate (grace: see below)
     phone = "10:00:00:00:00:01"
     cycle([tracker(phone, "Telefono")])
     cycle([tracker(phone, "Telefono", active=False)], clients=[phone])    # router says offline, Opal associates it
@@ -88,6 +90,17 @@ def test_events_api_summary(A, cycle):
     data = A.app.test_client().get("/api/events?hours=24").get_json()
     assert data["totals"] == {"move_ap": 1, "disconnect": 1}
     assert data["summary"][0]["name"] == "Telefono" and data["summary"][0]["move_ap"] == 1
+
+
+def test_opal_grace_period_bridges_short_radio_gaps(A, cycle):
+    phone = "10:00:00:00:00:01"
+    cycle([], clients=[phone])
+    device = {d["mac"]: d for d in cycle([])["devices"]}[phone]          # the driver omits the client for one poll
+    assert device["connected"] and device["group"] == "opal"
+    A.OPAL_MISSING_SINCE[phone] -= A.CFG["opal_missing_grace"]          # ...until the grace period is over
+    assert phone not in {d["mac"] for d in cycle([])["devices"] if d["connected"]}
+    with A.dbx() as db:
+        assert [r[0] for r in db.execute("SELECT kind FROM events ORDER BY ts, rowid")] == ["disconnect"]
 
 
 # ───────────── alerts with room and type
