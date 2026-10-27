@@ -4,6 +4,7 @@ Run with a SINGLE process (polling lives in a thread):
     waitress-serve --listen=0.0.0.0:8080 --threads=4 app:app
 """
 import copy
+import hashlib
 import hmac
 import json
 import logging
@@ -988,9 +989,21 @@ def guard():
         return jsonify(error="Invalid request"), 400
 
 
+def _asset_version():
+    """Short hash of static/: a new deploy changes the CSS/JS URLs, so browsers do not keep stale copies."""
+    digest = hashlib.sha1()
+    for path in sorted((ROOT / "static").rglob("*")):
+        if path.is_file():
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:10]
+
+
+ASSET_V = _asset_version()
+
+
 @app.get("/")
 def index():
-    return render_template("index.html", poll=CFG["poll"])
+    return render_template("index.html", poll=CFG["poll"], asset_v=ASSET_V)
 
 
 @app.get("/api/data")
