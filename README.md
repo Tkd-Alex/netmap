@@ -1,7 +1,5 @@
 # Netmap
 
-**English** · [Italiano](README.it.md)
-
 A live map of your home network: which devices are connected, **to which access point** (main router, mesh extender, secondary AP), with what signal, since when, and how they move from one AP to another. Every device can have a **type** (with an icon) and a **room**. It runs as a single Python process with a local SQLite history, and the web page is available in **English and Italian**.
 
 It was built for one specific setup, but it is adaptable:
