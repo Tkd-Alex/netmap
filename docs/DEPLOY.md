@@ -13,7 +13,7 @@ Two ways, both with a **single process** (`waitress`) and the data kept outside 
 
 | In the repository | You add (not, and must not be, in the repository) |
 |---|---|
-| Code (`app.py`, `templates/`), `requirements.txt` | `.env` with token and addresses: start from `.env.example` |
+| Code (`app.py`, `config.py`, `sources.py`, `database.py`, `builder.py`, `templates/`, `static/`), `requirements.txt` | `.env` with token and addresses: start from `.env.example` |
 | `Dockerfile`, `docker-compose.yml`, `deploy/` (systemd, LXC script) | **Your** `names.json` and `meta.json` in the data folder (optional: without them the router's names are used) |
 | Documentation, tests, `names.example.json`, `meta.example.json` | SSH key (or password) for the secondary AP |
 

@@ -159,7 +159,7 @@ Requests that change data need the header `X-Requested-With: dashboard` (CSRF pr
 ```bash
 git status --short                                      # no personal file among those to be added
 git grep -nIiE "([0-9a-f]{2}:){5}[0-9a-f]{2}" -- . ':!tests' ':!*.example.json' ':!.env.example'
-git grep -nIi "token\|password" -- . ':!*.md' ':!.env.example' ':!app.py' ':!deploy'
+git grep -nIi "token\|password" -- . ':!*.md' ':!.env.example' ':!app.py' ':!config.py' ':!sources.py' ':!deploy'
 ```
 
 If a token ends up in the history, **revoke it** in Home Assistant: rewriting the history is not enough.
