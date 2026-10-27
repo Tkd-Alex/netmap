@@ -16,7 +16,7 @@ Netmap is a home-network inventory and monitoring dashboard, not a general-purpo
 - **Production HTTP server:** Waitress. Flask's built-in server is suitable for development.
 - **Router source:** Home Assistant HTTP API (`HA_URL`, `HA_TOKEN`).
 - **Optional AP source:** SSH via Paramiko to GL.iNet/OpenWrt.
-- **Frontend:** server-rendered HTML template with embedded CSS and vanilla JavaScript; no frontend build step is currently required.
+- **Frontend:** server-rendered HTML template plus `static/css/netmap.css` and `static/js/netmap.js` (vanilla JavaScript); no frontend build step is required.
 - **Persistence:** SQLite for signal samples, events, and first/last-seen state; JSON files for labels and device metadata.
 - **Runtime model:** one application process with a background polling thread. The worker and in-memory state are process-local, so do not run multiple worker-enabled application processes for the same instance without redesigning this model.
 
@@ -41,8 +41,12 @@ The default poll interval is 30 seconds, with a minimum of 10 seconds. The worke
 
 Typical project files:
 
-- `app.py` — Flask application, configuration, polling, source integrations, normalization, persistence, and API routes.
-- `templates/index.html` — current single-file frontend (HTML, CSS, JavaScript).
+- `app.py` — Flask application, request guard, API routes, static asset version, and worker start-up.
+- `config.py` — environment configuration, constants (`GROUP`, `LABEL`, `BAND`, `TYPES`), type suggestions, bilingual `L()`/`msg()`, and logging setup.
+- `sources.py` — Home Assistant HTTP client and the persistent Opal SSH session with its output parsing.
+- `database.py` — names/meta JSON storage, SQLite helpers (schema, history, seen, pruning, stats), offline alerts, and `HEALTH`.
+- `builder.py` — device map building, event detection, data collection, the shared `STATE`, and the polling worker.
+- `templates/index.html` — HTML template; `static/css/netmap.css` and `static/js/netmap.js` hold the styles and script.
 - `names.json` — user-defined labels keyed by normalized MAC.
 - `meta.json` — user-defined device type and room metadata keyed by normalized MAC.
 - SQLite database — signal samples, events, and seen records.
@@ -53,7 +57,7 @@ The project has been deployed on Debian 12 in an LXC, with application files und
 
 ## 4. Configuration reference
 
-Configuration is read from environment variables. `app.py` attempts to load `.env` next to itself; already-exported environment variables take precedence.
+Configuration is read from environment variables. `config.py` attempts to load `.env` from the application folder; already-exported environment variables take precedence.
 
 | Variable | Purpose | Default / notes |
 |---|---|---|
@@ -77,9 +81,10 @@ Configuration is read from environment variables. `app.py` attempts to load `.en
 | `EXTENDER_NAMES` | Comma-separated extender name fragments | Empty |
 | `UPLINK_EXPECTED_AP` | Expected AP name fragment for uplink warnings | Empty disables this check |
 | `POLL_SECONDS` | Polling interval | `30`, minimum `10` |
-| `NAMES_FILE` | Labels JSON path | `names.json` beside `app.py` by default |
-| `META_FILE` | Type/room JSON path | `meta.json` beside `app.py` by default |
-| `DB_PATH` | SQLite path | `network.db` beside `app.py` by default |
+| `OPAL_MISSING_GRACE_SECONDS` | How long an Opal client missing from the radio views stays connected | `120`; `0` disables the grace period |
+| `NAMES_FILE` | Labels JSON path | `names.json` in the application folder by default |
+| `META_FILE` | Type/room JSON path | `meta.json` in the application folder by default |
+| `DB_PATH` | SQLite path | `network.db` in the application folder by default |
 | `RETENTION_DAYS` | Sample/event retention | `14`, minimum `1` |
 | `RSSI_GOOD` | Good RSSI threshold | `-60` dBm |
 | `RSSI_WARN` | Warning RSSI threshold | `-75` dBm |
@@ -129,7 +134,7 @@ SQLite uses WAL mode. Reuse the existing database helpers/context manager, param
 
 ## 7. Frontend conventions
 
-The UI currently lives in one HTML template with embedded CSS and vanilla JavaScript. It supports bilingual strings through the `T` translation dictionary and browser/local-storage language selection, dark/light themes persisted in local storage, topology grouping by connection/room/type, a sortable/searchable inventory, copy buttons, history charts, event tables, source diagnostics, and device-edit dialogs.
+The UI lives in `templates/index.html`, `static/css/netmap.css`, and `static/js/netmap.js` (vanilla JavaScript, `'use strict'`). The poll interval reaches the script through `<meta name="poll-interval">`, and CSS/JS URLs carry a `?v=` hash of `static/` so browsers reload them after a deploy. It supports bilingual strings through the `T` translation dictionary and browser/local-storage language selection, dark/light themes persisted in local storage, topology grouping by connection/room/type, a sortable/searchable inventory, copy buttons, history charts, event tables, source diagnostics, and device-edit dialogs.
 
 ### UI rules
 
@@ -144,8 +149,6 @@ The UI currently lives in one HTML template with embedded CSS and vanilla JavaSc
 - Keep IP and MAC rows vertically separated enough to scan easily.
 - Give the refresh icon fixed dimensions so it cannot shrink when the label changes.
 - Test both desktop and mobile widths after layout changes.
-
-Splitting the template into `templates/index.html`, `static/css/netmap.css`, and `static/js/netmap.js` could improve maintainability, but should be a separate planned refactor with regression checks—not mixed into an unrelated visual fix.
 
 ## 8. Development and validation
 
@@ -166,7 +169,9 @@ waitress-serve --listen=0.0.0.0:8080 --threads=4 app:app
 Basic Python syntax check:
 
 ```bash
-python -m py_compile app.py
+python -m py_compile app.py config.py sources.py database.py builder.py
+node --check static/js/netmap.js
+pytest -q
 ```
 
 Where tools are available, validate embedded JavaScript, HTML, and CSS. Browser smoke tests should cover:
@@ -205,7 +210,8 @@ A syntax check is not an end-to-end test. State exactly which checks were run. N
 
 1. **Inspect before editing.** Read the current files and verify actual implementation before proposing changes.
 2. **Use the latest user-provided files.** Older conversation attachments may be stale; do not silently revert to them.
-3. **Keep changes scoped.** Prefer targeted patches over rewriting all of `app.py` or the template.
+3. **Keep changes scoped.** Prefer targeted patches over rewriting whole modules or the template.
+   `builder.STATE` is rebound every cycle: read it through the module (`builder.STATE`), never via `from builder import STATE`.
 4. **Preserve contracts.** Do not break API routes, database layout, language switching, themes, or user metadata unintentionally.
 5. **State backend impact.** Clearly distinguish frontend-only, backend-only, and cross-layer changes.
 6. **Do not fabricate tests.** Separate syntax checks, unit tests, browser tests, and live-environment tests in reports.
@@ -222,7 +228,6 @@ These are design considerations, not claims that the features are already implem
 - A single CSV containing RSSI history for all devices needs a dedicated aggregate endpoint; the existing history route is per MAC.
 - Source-health UI should distinguish disabled, waiting, failed, stale, and healthy sources using existing health data accurately.
 - Automatic Uptime Kuma monitor synchronization (IP updates and tags) is a possible future integration, not part of the current API.
-- The frontend is still a single-file template; splitting CSS and JavaScript is a possible planned refactor, not a prerequisite for small UI changes.
 
 ## Quick reference
 
