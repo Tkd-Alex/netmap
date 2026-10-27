@@ -9,19 +9,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import pytest  # noqa: E402
 
 import app as netmap  # noqa: E402
+import builder  # noqa: E402
+import config  # noqa: E402
+import database  # noqa: E402
 
 
 @pytest.fixture()
 def A(tmp_path, monkeypatch):
     """The module with data, names and meta in a temporary folder, and a clean state."""
-    monkeypatch.setitem(netmap.CFG, "db", str(tmp_path / "n.db"))
-    monkeypatch.setitem(netmap.CFG, "names", str(tmp_path / "names.json"))
-    monkeypatch.setitem(netmap.CFG, "meta", str(tmp_path / "meta.json"))
-    monkeypatch.setattr(netmap, "STATE", {"ts": None, "errors": {}, "data": None, "health": None})
-    for container in (netmap.LAST, netmap.ALIAS_LOGGED, netmap.OFFLINE_ALERTED, netmap._GOOD, netmap.CONFIG_ERRORS,
-                      netmap.OPAL_MISSING_SINCE):
+    monkeypatch.setitem(config.CFG, "db", str(tmp_path / "n.db"))
+    monkeypatch.setitem(config.CFG, "names", str(tmp_path / "names.json"))
+    monkeypatch.setitem(config.CFG, "meta", str(tmp_path / "meta.json"))
+    monkeypatch.setattr(builder, "STATE", {"ts": None, "errors": {}, "data": None, "health": None})
+    for container in (builder.LAST, builder.ALIAS_LOGGED, database.OFFLINE_ALERTED, database._GOOD, database.CONFIG_ERRORS,
+                      builder.OPAL_MISSING_SINCE):
         container.clear()
-    netmap.init_db()
+    database.init_db()
     return netmap
 
 
@@ -78,8 +81,8 @@ def cycle(A, monkeypatch):
             def raiser():
                 raise RuntimeError(message)
             return raiser
-        monkeypatch.setattr(A, "fetch_home_assistant", (lambda: dict(fw="x", devices=devices)) if router_ok else boom("HA down"))
-        monkeypatch.setattr(A, "fetch_opal", (lambda: opal(clients, wired, neigh)) if opal_ok else boom("SSH down"))
-        A.collect()
-        return A.STATE["data"]
+        monkeypatch.setattr(builder, "fetch_home_assistant", (lambda: dict(fw="x", devices=devices)) if router_ok else boom("HA down"))
+        monkeypatch.setattr(builder, "fetch_opal", (lambda: opal(clients, wired, neigh)) if opal_ok else boom("SSH down"))
+        builder.collect()
+        return builder.STATE["data"]
     return run
