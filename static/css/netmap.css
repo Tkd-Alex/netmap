@@ -152,7 +152,7 @@ input:focus,select:focus{border-color:var(--blue);box-shadow:0 0 0 3px color-mix
 .mid{color:var(--amber)}
 
 .bad{color:var(--red)}
-.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:13px;background:var(--surface)}
+.table-wrap{position:relative;overflow:auto;border:1px solid var(--line);border-radius:13px;background:var(--surface)}
 
 table{width:100%;border-collapse:separate;border-spacing:0;min-width:1240px}
 
