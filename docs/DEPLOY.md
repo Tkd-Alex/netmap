@@ -1,7 +1,5 @@
 # Going to production
 
-**English** · [Italiano](DEPLOY.it.md)
-
 Two ways, both with a **single process** (`waitress`) and the data kept outside the code:
 
 - **A. Proxmox LXC** with systemd (lightweight, recommended if you already run Proxmox).
