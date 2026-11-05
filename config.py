@@ -40,7 +40,12 @@ def load_dotenv():
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+        value = value.strip()
+        if value[:1] in ("'", '"') and value[1:].find(value[0]) >= 0:
+            value = value[1:1 + value[1:].find(value[0])]  # quoted: keep "#" literally
+        else:
+            value = re.split(r"\s+#", value, maxsplit=1)[0].strip()  # drop inline " # comment"
+        os.environ.setdefault(key.strip(), value)
 
 
 try:
