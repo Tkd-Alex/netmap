@@ -1,19 +1,107 @@
-# Netmap
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/svg/logo-primary-on-dark.svg">
+    <img src="assets/brand/svg/logo-primary.svg" alt="Netmap — your network, at a glance" width="440">
+  </picture>
+</p>
 
-A live map of your home network: which devices are connected, **to which access point** (main router, mesh extender, secondary AP), with what signal, since when, and how they move from one AP to another. Every device can have a **type** (with an icon) and a **room**. It runs as a single Python process with a local SQLite history, and the web page is available in **English and Italian**.
+<p align="center">
+  <a href="https://github.com/Tkd-Alex/netmap/actions/workflows/ci.yml"><img src="https://github.com/Tkd-Alex/netmap/actions/workflows/ci.yml/badge.svg" alt="tests"></a>
+  <img src="https://img.shields.io/badge/python-3.11%2B-007BFF" alt="Python 3.11+">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-00E676" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/UI-English%20%7C%20Italiano-00D1FF" alt="English | Italiano">
+</p>
 
-It was built for one specific setup, but it is adaptable:
+A live map of your home network: which devices are connected, **to which access point** (main router, mesh extender, secondary AP), with what signal, since when, and how they move from one AP to another. Every device can have a **type** (with an icon) and a **room**. It runs as a single Python process with a local SQLite history, and the web page is available in **English and Italian**, with dark and light themes.
 
-```
-Internet ─ TP-Link router (AX55) ──  Home Assistant ─┐ (device_tracker)
-               │  5 GHz Wi-Fi uplink                 │
-               ▼                                     ▼
-       GL.iNet Opal (OpenWrt)  ── SSH ──────────►  Netmap ──► http://host:8080
-        ├─ LAN: camera
-        └─ 2.4 GHz Wi-Fi: IoT devices
+<p align="center">
+  <img src="docs/screenshots/desktop-dark.png" alt="Netmap dashboard, dark theme" width="820">
+</p>
+
+<details>
+<summary>More screenshots (light theme, mobile)</summary>
+<p align="center">
+  <img src="docs/screenshots/desktop-light.png" alt="Netmap dashboard, light theme" width="820">
+  <img src="docs/screenshots/mobile-dark.png" alt="Netmap on a phone, dark theme" width="300">
+</p>
+</details>
+
+## How it fits in your network
+
+It was built for one specific setup, but it is adaptable. Netmap never talks to the TP-Link router directly: it reads it **through Home Assistant**, and it reads the optional secondary AP **over SSH**.
+
+```mermaid
+flowchart LR
+    internet((Internet)) --- ax55["TP-Link Archer AX55<br/>main router"]
+    ax55 -. "Wi-Fi / LAN" .- clients1["Phones, PCs, TV…"]
+    ax55 -. mesh .- re["Mesh extender<br/>(optional)"]
+    ax55 == "5 GHz Wi-Fi uplink" ==> opal["GL.iNet Opal · OpenWrt<br/>secondary AP (optional)"]
+    opal -. "2.4 GHz Wi-Fi" .- iot["IoT devices"]
+    opal -. "LAN port" .- cam["Camera"]
+
+    ha["Home Assistant<br/>device_tracker entities"] -- "router integration" --> ax55
+
+    subgraph host ["Netmap host (LXC / Docker)"]
+        netmap["Netmap<br/>Flask + worker"] --- db[("SQLite<br/>network.db")]
+        netmap --- files["names.json<br/>meta.json"]
+    end
+
+    netmap -- "HTTP API · token" --> ha
+    netmap -- "SSH · iwinfo, ubus, ip neigh, bridge" --> opal
+    browser["Browser"] -- "http://host:8080" --> netmap
+    kuma["Uptime Kuma"] -- "/api/health" --> netmap
 ```
 
 > The labels in the interface say "AX55" and "Opal" because that is the author's setup. The secondary access point is **optional**: without `OPAL_HOST` Netmap works with the main router only.
+
+### What happens every cycle
+
+A single background thread polls both sources **in parallel**, merges them by MAC address and publishes a new snapshot that the page picks up.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant W as Worker (every POLL_SECONDS)
+    participant HA as Home Assistant
+    participant O as Opal (SSH)
+    participant B as build()
+    participant DB as SQLite
+    participant UI as Browser
+
+    par in parallel
+        W->>HA: GET device_tracker states (template)
+        HA-->>W: MAC, IP, AP, band, RSSI, rates
+    and
+        W->>O: one SSH session, batched commands
+        O-->>W: assoclist, hostapd clients, uplink, ARP, bridge FDB
+    end
+    Note over W: source failed? reuse last valid reading (≤ 10 min), mark it stale
+    W->>B: router + Opal + names.json + meta.json + previous state
+    B-->>W: devices, groups, aliases, alerts
+    W->>W: detect events (AP/band change, connect, disconnect)
+    W->>DB: seen, samples, events (hourly prune)
+    W-->>UI: new STATE snapshot
+    UI->>W: GET /api/data?since=ts
+```
+
+### Which source wins
+
+For a device behind the secondary AP both sources may report something, sometimes under the wrong MAC:
+
+```mermaid
+flowchart TD
+    mac["Device MAC"] --> q1{"Associated to the Opal<br/>(iwinfo / hostapd)?"}
+    q1 -- yes --> opalwifi["Behind the Opal · Wi-Fi<br/>RSSI from the Opal"]
+    q1 -- no --> q2{"In the Opal bridge FDB<br/>on OPAL_LAN_IF / OPAL_WIRED_MACS?"}
+    q2 -- yes --> opalwired["Behind the Opal · wired"]
+    q2 -- no --> q3{"Reported by the AX55<br/>under its own MAC?"}
+    q3 -- yes --> ax["On the AX55 / extender<br/>as Home Assistant reports it"]
+    q3 -- no --> q4{"Seen by the AX55 with the<br/>Opal's MAC (alias)?"}
+    q4 -- yes --> alias["Online behind the Opal<br/>(Wi-Fi vs wired unknown)"]
+    q4 -- no --> off["Offline"]
+```
+
+Recently vanished Opal clients stay connected for `OPAL_MISSING_GRACE_SECONDS` (only while the Opal answers), because the radio views drop clients for a moment from time to time. See [docs/presence-detection.md](docs/presence-detection.md).
 
 ## Features
 
@@ -25,13 +113,14 @@ Internet ─ TP-Link router (AX55) ──  Home Assistant ─┐ (device_tracker
 - **Source priority**: for what sits behind the secondary AP, the AP itself wins (associated and wired clients), then what the main router reports. Devices that the router sees under the AP's MAC ("aliases") are handled too.
 - **Diagnostics**: a panel with the state, duration and detail of each source, readable logs and `/api/health` for monitors.
 - **Failure tolerant**: if a source stops answering it shows the last valid reading (up to 10 minutes) and does **not** invent events.
-- **Two languages**: Italian and English, with a selector in the header. The choice is remembered; the first time it follows the browser language.
+- **Two languages and two themes**: Italian and English, dark and light, with selectors in the header. Both choices are remembered; the first time the language follows the browser.
+- **Quick copy** of IP and MAC from cards and table rows.
 
 ## Requirements
 
 - Python 3.11+ (or Docker).
 - **Home Assistant** with the router's `device_tracker` entities (state `home` = connected). Netmap reads these attributes: `mac`/`mac_address`, `ip`/`ip_address`, `friendly_name`/`host_name`/`hostname`, `connection`, `band`, `ap_name`, `signal`, `tx_rate`, `rx_rate` (kbps), `ssid`, `source_type`. The author uses them with a TP-Link Archer AX55: with another integration you may need to adapt `fetch_home_assistant` and `HA_TEMPLATE` in `app.py`.
-- (Optional) an **OpenWrt/GL.iNet** access point with SSH. It uses `iwinfo`, `ip neigh` and, for wired devices, `bridge` (the `ip-bridge` package) or `brctl`. Developed on a GL.iNet Opal (GL-SFT1200).
+- (Optional) an **OpenWrt/GL.iNet** access point with SSH. It uses `iwinfo`, `ubus call hostapd.<if> get_clients`, `ip neigh` and, for wired devices, `bridge` (the `ip-bridge` package) or `brctl`. Developed on a GL.iNet Opal (GL-SFT1200).
 - **paramiko < 5**: version 5 dropped the SHA-1 `ssh-rsa` host key that older Dropbear servers still use (`requirements.txt` already pins it).
 
 ## Quick start (development)
@@ -46,6 +135,13 @@ python app.py                   # http://localhost:8080
 pytest                          # tests
 ```
 
+Or with Docker:
+
+```bash
+cp .env.example .env            # fill it in; mount the SSH key as in docker-compose.yml
+docker compose up -d --build    # data in ./data
+```
+
 For everyday use see **[docs/DEPLOY.md](docs/DEPLOY.md)** (Proxmox LXC, Docker, reverse proxy, monitoring).
 
 ## Configuration
@@ -57,7 +153,7 @@ Everything is set through environment variables or the `.env` file (see `.env.ex
 | `HA_URL`, `HA_TOKEN` | – | Home Assistant and its long-lived access token. `HA_VERIFY_SSL=false` for self-signed certificates |
 | `OPAL_HOST` | empty | Secondary AP over SSH; **empty = disabled** |
 | `OPAL_PORT`, `OPAL_USER` | `22`, `root` | |
-| `OPAL_PASSWORD` / `OPAL_KEY` | – | Password or private key (recommended) |
+| `OPAL_PASSWORD` / `OPAL_KEY` | – | Password (`OPAL_PASS` also accepted) or private key (recommended) |
 | `OPAL_KNOWN_HOSTS` | – | If set the host key is verified, otherwise it is accepted on first contact |
 | `OPAL_AP_IF`, `OPAL_STA_IF` | `wlan0`, `wlan-sta0` | Access point interface and the client interface used for the uplink |
 | `OPAL_LAN_IF`, `OPAL_BRIDGE` | – , `br-lan` | Physical LAN port (e.g. `eth0.1`): MACs seen there are "wired". List the ports with `ls /sys/class/net/br-lan/brif` |
@@ -65,6 +161,7 @@ Everything is set through environment variables or the `.env` file (see `.env.ex
 | `UPLINK_EXPECTED_AP` | – | Part of the name of the AP the secondary AP must be attached to; alert if different |
 | `EXTENDER_NAMES` | – | Mesh extenders (partial name) to tell them apart in roaming |
 | `AX55_MAC`, `RE700X_MAC` | – | Used only if the router does not say which AP the secondary AP is attached to |
+| `OPAL_MISSING_GRACE_SECONDS` | `120` | How long an Opal client missing from the radio views stays connected; `0` disables it |
 | `POLL_SECONDS` | `30` | Cycle period, **including** the collection time (minimum 10) |
 | `RETENTION_DAYS` | `14` | How long samples and events are kept |
 | `RSSI_GOOD`, `RSSI_WARN`, `UPLINK_WARN` | `-60`, `-75`, `-70` | Thresholds in dBm |
@@ -74,6 +171,8 @@ Everything is set through environment variables or the `.env` file (see `.env.ex
 | `DASH_USER`, `DASH_PASSWORD` | – | Optional HTTP Basic auth |
 | `NETMAP_LANG` | `en` | Language of the **logs**: `en` or `it`. The page language is chosen in the browser |
 | `LOG_LEVEL`, `LOG_FILE` | `INFO`, – | `DEBUG` adds tracebacks and the time of every SSH command |
+| `HOST`, `PORT` | `0.0.0.0`, `8080` | Bind address of `python app.py` (with Waitress use `--listen`) |
+| `DASH_NO_WORKER` | – | Set to disable the polling worker (tests, debugging) |
 
 ## Type, room and icons
 
@@ -164,6 +263,13 @@ git grep -nIi "token\|password" -- . ':!*.md' ':!.env.example' ':!app.py' ':!con
 
 If a token ends up in the history, **revoke it** in Home Assistant: rewriting the history is not enough.
 
+## Further reading
+
+- [docs/DEPLOY.md](docs/DEPLOY.md) — production setup (LXC, Docker, reverse proxy, monitoring)
+- [docs/device-mapping.md](docs/device-mapping.md) — how devices, APs and RSSI are identified
+- [docs/presence-detection.md](docs/presence-detection.md) — `iwinfo` vs `hostapd` on the Opal
+- [assets/brand/](assets/brand/) — logo, icons and palette
+
 ## License
 
-Pick a license before publishing (for example MIT) and add the `LICENSE` file.
+[MIT](LICENSE) © 2026 Tkd-Alex
