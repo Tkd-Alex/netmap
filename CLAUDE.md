@@ -46,6 +46,7 @@ Typical project files:
 - `sources.py` — Home Assistant HTTP client and the persistent Opal SSH session with its output parsing.
 - `database.py` — names/meta JSON storage, SQLite helpers (schema, history, seen, pruning, stats), offline alerts, and `HEALTH`.
 - `builder.py` — device map building, event detection, data collection, the shared `STATE`, and the polling worker.
+- `kuma.py` — optional Uptime Kuma sync over Kuma's Socket.IO API (persistent logged-in session, monitor/tag reconciliation, cached heartbeat status).
 - `templates/index.html` — HTML template; `static/css/netmap.css` and `static/js/netmap.js` hold the styles and script.
 - `names.json` — user-defined labels keyed by normalized MAC.
 - `meta.json` — user-defined device type and room metadata keyed by normalized MAC.
@@ -98,6 +99,12 @@ Configuration is read from environment variables. `config.py` attempts to load `
 | `LOG_LEVEL` | Python logging level | `INFO` |
 | `LOG_FILE` | Optional rotating log file path | Empty means console only |
 | `DASH_NO_WORKER` | Disable polling worker | Unset enables worker |
+| `KUMA_URL` | Uptime Kuma base URL | Empty disables the Kuma sync |
+| `KUMA_USERNAME` / `KUMA_PASSWORD` | Kuma login (Kuma API keys only read `/metrics`, so the sync logs in as the Kuma user) | Secret; 2FA must be off for that login |
+| `KUMA_DEFAULT_TYPES` | Types monitored unless switched off per device | `camera,rete,luce_presa` |
+| `KUMA_INTERVAL` | Check interval for created monitors (s) | `60`, minimum `20` |
+| `KUMA_ALEXA_PORT` | TCP port checked on Alexa/Echo devices | `1080` |
+| `KUMA_SHELLY_EXPECTED` | Shelly JSON-query threshold (`$number(wifi.rssi) > value`) | `-70` |
 | `HOST` / `PORT` | Built-in Flask server bind | `0.0.0.0` / `8080` |
 
 Never put real tokens, passwords, private keys, or other secrets in documentation, tests, commits, or logs.
@@ -115,22 +122,31 @@ The frontend uses same-origin endpoints. Keep the API contract stable unless a c
 | `POST /api/refresh` | Wake the worker and wait briefly for a new poll cycle |
 | `GET /api/history?mac=<MAC>&hours=24` | Aggregated RSSI history for a device or special `opal:uplink` pseudo-ID |
 | `PATCH /api/names/<mac>` | Set or clear a device label |
-| `PATCH /api/meta/<mac>` | Set or clear device type and room |
+| `PATCH /api/meta/<mac>` | Set or clear device type, room and optional `kuma: {enabled, check}` (omitted `kuma` keeps the stored value; `null`/`""` = automatic) |
 | `POST /api/meta/apply-suggestions` | Persist suggested types only where an explicit type has not already been stored |
 
 Write requests are guarded by the custom `X-Requested-With: dashboard` header; frontend write requests must continue to send it. Optional HTTP Basic Auth applies to requests when enabled.
 
-`/api/health` reports the health of Netmap's own data sources and polling, not the online status of every individual device. `/api/events` currently limits event rows to 300, so exporting that response does **not** guarantee a complete global historical export. `/api/history` returns aggregated RSSI points, not packet-level or every-poll data.
+`/api/health` reports the health of Netmap's own data sources (including Uptime Kuma when enabled) and polling, not the online status of every individual device. `/api/events` currently limits event rows to 300, so exporting that response does **not** guarantee a complete global historical export. `/api/history` returns aggregated RSSI points, not packet-level or every-poll data.
 
 ## 6. SQLite schema
 
 The application initializes these tables and indexes:
 
 - `samples(ts, mac, ip, name, ap, band, ssid, rssi, tx, rx)` — time-series observations; indexed by `(mac, ts)` and `ts`.
-- `events(ts, mac, name, kind, src, dst)` — connection, AP-movement, and band/network events; indexed by `ts` and `(mac, ts)`.
+- `events(ts, mac, name, kind, src, dst)` — connection, AP-movement, band/network, and IP-change (`kind='ip'`, `src`/`dst` = old/new IP) events; indexed by `ts` and `(mac, ts)`.
 - `seen(mac PRIMARY KEY, first_seen, last_seen)` — first/last-seen tracking.
 
 SQLite uses WAL mode. Reuse the existing database helpers/context manager, parameterize SQL queries, and account for concurrent reads and writes. Avoid schema changes that discard history; document and test migrations and backup/recovery steps.
+
+### Uptime Kuma sync
+
+- Enabled when `KUMA_URL` is set. `kuma.sync()` runs in the worker after each `collect()`, only when the cycle's data is `clean`, in its own try/except; failures appear as `HEALTH["kuma"]`.
+- Ownership: a monitor is Netmap's only if it has the `netmap` tag and its description is `MAC(<MAC>)` (upper case); removing the tag by hand releases it. Earlier formats (`netmap:<mac>` line; `MAC=<MAC>` with the tag) are adopted once and rewritten. Netmap never edits, pauses or deletes any other monitor and never deletes monitors at all. Opted-out devices and devices no source reports any more are paused; a paused monitor is resumed only when the user switches the device back on (a manual pause in Kuma is respected).
+- On managed monitors Netmap owns the name (`<label> (<ip>)`), address, check settings and **all tags**: `netmap`, room, confirmed type (`kuma.TYPE_TAG`) and connection (`kuma.CONN_TAG`; kept while offline). Existing Kuma tags with the same name are reused.
+- Check type: `meta.json` `kuma.check` override, else `config.suggest_check()` (shelly → JSON query on `/rpc/Shelly.GetStatus`; echo/alexa/amazon → TCP port; otherwise ping). Opt-in: `kuma.enabled` override, else type in `KUMA_DEFAULT_TYPES` or a non-ping check.
+- Each device carries `kuma: {enabled, enabled_set, check, check_set, check_auto, monitor, status}` in `/api/data`; `data.kuma.enabled` tells the page whether the sync is on.
+- Tested against Uptime Kuma 2.5.x. Kuma's Socket.IO API is not a stable public API: re-check `kuma.new_monitor()` fields after Kuma upgrades.
 
 ## 7. Frontend conventions
 
@@ -169,7 +185,7 @@ waitress-serve --listen=0.0.0.0:8080 --threads=4 app:app
 Basic Python syntax check:
 
 ```bash
-python -m py_compile app.py config.py sources.py database.py builder.py
+python -m py_compile app.py config.py sources.py database.py builder.py kuma.py
 node --check static/js/netmap.js
 pytest -q
 ```
@@ -203,7 +219,7 @@ A syntax check is not an end-to-end test. State exactly which checks were run. N
 - Do not expose the dashboard publicly without a deliberate authentication and network-security design.
 - Basic Auth and the custom write-request header are safeguards, not substitutes for TLS, network controls, or a complete threat model.
 - Do not treat stale source data as fresh, or a source failure as proof that all clients disconnected.
-- Do not synchronize or mutate Uptime Kuma monitors unless that integration is explicitly designed and reviewed.
+- The Uptime Kuma sync may only mutate monitors it owns (`netmap` tag + `MAC(<MAC>)` description); never touch other monitors and never delete monitors.
 - Avoid destructive database/metadata operations without explicit approval.
 
 ## 10. Working rules for AI coding assistants
@@ -227,7 +243,7 @@ These are design considerations, not claims that the features are already implem
 - Current/filtered inventory CSV export can be implemented in the browser. A complete global event export needs a backend endpoint or pagination because `/api/events` returns at most 300 event rows.
 - A single CSV containing RSSI history for all devices needs a dedicated aggregate endpoint; the existing history route is per MAC.
 - Source-health UI should distinguish disabled, waiting, failed, stale, and healthy sources using existing health data accurately.
-- Automatic Uptime Kuma monitor synchronization (IP updates and tags) is a possible future integration, not part of the current API.
+- Uptime Kuma: no status page/notification management yet; the sync pauses but never deletes monitors.
 
 ## Quick reference
 

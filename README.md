@@ -115,6 +115,7 @@ Recently vanished Opal clients stay connected for `OPAL_MISSING_GRACE_SECONDS` (
 - **Failure tolerant**: if a source stops answering it shows the last valid reading (up to 10 minutes) and does **not** invent events.
 - **Two languages and two themes**: Italian and English, dark and light, with selectors in the header. Both choices are remembered; the first time the language follows the browser.
 - **Quick copy** of IP and MAC from cards and table rows.
+- **Uptime Kuma sync** (optional): one monitor per chosen device, tracked by MAC, so the monitor follows IP changes; tags follow room, type and connection.
 
 ## Requirements
 
@@ -223,6 +224,17 @@ Home Assistant · AX55: ERROR · ConnectionError… (attempt #1)
 
 If an SSH command takes longer than 1 s, `slow: …` appears in the cycle line. For details use `LOG_LEVEL=DEBUG`. Set `NETMAP_LANG=it` for Italian logs.
 
+## Uptime Kuma sync (optional)
+
+Set `KUMA_URL`, `KUMA_USERNAME` and `KUMA_PASSWORD` in `.env`. Kuma API keys only give read access to `/metrics`, so creating and editing monitors needs the Kuma login, and 2FA must be off for it. Every poll, Netmap does the following for each device whose "Monitor in Uptime Kuma" switch is on (edit dialog):
+
+- creates one monitor with the tag `netmap` and the description `MAC(AA:BB:CC:DD:EE:FF)`: the two together are how Netmap recognises its monitors (remove the tag to take a monitor out of Netmap's hands);
+- updates the monitor's name, address and URL when the device's IP changes (the change is also recorded as an event);
+- keeps the tags in sync: `netmap`, room, confirmed type and connection (Wi-Fi band / wired / Opal), reusing existing Kuma tags with the same name;
+- picks the check: **Shelly** → JSON query on `http://<ip>/rpc/Shelly.GetStatus`, `$number(wifi.rssi) > -70`; **Alexa/Echo/Amazon** → TCP port 1080; anything else → ping. You can override it per device.
+
+The switch defaults to on for the types in `KUMA_DEFAULT_TYPES` (cameras, network gear, lights/plugs) and for Alexa/Shelly devices. Turning it off **pauses** the monitor; Netmap never deletes monitors and never touches monitors without both the `netmap` tag and the `MAC(…)` description. Sync only runs when every source answered, so a router outage cannot rewrite addresses. Cards and table rows show a small dot with the Kuma status, and Kuma appears in the diagnostics panel and in `/api/health`.
+
 ## API
 
 Requests that change data need the header `X-Requested-With: dashboard` (CSRF protection). Texts meant for display (`alerts[].text`, `types`, source `detail`) are `{"it": …, "en": …}` objects and the page picks one; group labels use neutral tokens (`wired`, `guest`, `undetermined`).
@@ -235,7 +247,7 @@ Requests that change data need the header `X-Requested-With: dashboard` (CSRF pr
 | `GET /api/history?mac=…&hours=24` | Signal series (`mac=opal:uplink` for the uplink) |
 | `GET /api/events?hours=24[&mac=…]` | AP/band changes, connections, disconnections |
 | `PATCH /api/names/<mac>` | `{"name": "…"}` (empty removes it) |
-| `PATCH /api/meta/<mac>` | `{"type": "camera", "room": "Kitchen"}` |
+| `PATCH /api/meta/<mac>` | `{"type": "camera", "room": "Kitchen", "kuma": {"enabled": true, "check": "ping"}}` (`kuma` optional; `null`/`""` = automatic) |
 | `POST /api/meta/apply-suggestions` | Confirms the suggested types |
 
 ## Security

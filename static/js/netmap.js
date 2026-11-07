@@ -53,7 +53,7 @@ unkConnected:['Connessi, collegamento non determinato','Connected, link undeterm
 noRoom:['Senza stanza','No room'],unclassified:['Non classificati','Unclassified'],noDevices:['Nessun dispositivo.','No devices.'],
 allTypes:['Tutti i tipi','All types'],allRooms:['Tutte le stanze','All rooms'],unclassifiedIcon:['Non classificato','Unclassified'],suggestedTag:['(suggerito)','(suggested)'],
 unknown:['sconosciuto','unknown'],otherAP:['altro AP','other AP'],
-tkWired:['cavo','wired'],tkGuest:['ospiti','guest'],tkUndet:['non determinato','undetermined'],themeToLight:['☀ Tema chiaro','☀ Light theme'],themeToDark:['☾ Tema scuro','☾ Dark theme'],themeAria:['Cambia tema chiaro o scuro','Toggle light or dark theme'],copyIp:['Copia IP {0}','Copy IP {0}'],copyMac:['Copia MAC {0}','Copy MAC {0}'],copied:['Copiato: {0}','Copied: {0}'],copyFailed:['Impossibile copiare. Prova a selezionare e copiare manualmente.','Could not copy. Try selecting and copying manually.'],clearFilters:['Azzera filtri','Clear filters'],clearFiltersTitle:['Azzera ricerca e filtri','Reset search and filters'],thStatus:['Stato','Status'],thTx:['TX Mbps','TX Mbps'],thRx:['RX Mbps','RX Mbps'],statusOnline:['Online','Online'],statusOffline:['Offline','Offline'],noResults:['Nessun dispositivo corrisponde alla ricerca e ai filtri.','No devices match the search and filters.'],tableScrollHint:['Su schermi piccoli, scorri orizzontalmente la tabella per vedere tutte le colonne.','On small screens, scroll horizontally to see all columns.']};
+tkWired:['cavo','wired'],tkGuest:['ospiti','guest'],tkUndet:['non determinato','undetermined'],themeToLight:['☀ Tema chiaro','☀ Light theme'],themeToDark:['☾ Tema scuro','☾ Dark theme'],themeAria:['Cambia tema chiaro o scuro','Toggle light or dark theme'],copyIp:['Copia IP {0}','Copy IP {0}'],copyMac:['Copia MAC {0}','Copy MAC {0}'],copied:['Copiato: {0}','Copied: {0}'],copyFailed:['Impossibile copiare. Prova a selezionare e copiare manualmente.','Could not copy. Try selecting and copying manually.'],clearFilters:['Azzera filtri','Clear filters'],clearFiltersTitle:['Azzera ricerca e filtri','Reset search and filters'],thStatus:['Stato','Status'],thTx:['TX Mbps','TX Mbps'],thRx:['RX Mbps','RX Mbps'],statusOnline:['Online','Online'],statusOffline:['Offline','Offline'],noResults:['Nessun dispositivo corrisponde alla ricerca e ai filtri.','No devices match the search and filters.'],fKuma:['Monitora in Uptime Kuma','Monitor in Uptime Kuma'],fKumaCheck:['Controllo Uptime Kuma','Uptime Kuma check'],kcAuto:['Automatico ({0})','Automatic ({0})'],kcPing:['Ping','Ping'],kcAlexa:['Porta TCP (Alexa/Echo)','TCP port (Alexa/Echo)'],kcShelly:['Shelly · RSSI Wi-Fi (JSON)','Shelly · Wi-Fi RSSI (JSON)'],kumaAutoOn:['Attivo in automatico per questo tipo di dispositivo','On automatically for this device type'],kumaAutoOff:['Spento in automatico: attivalo per creare il monitor','Off by default: switch it on to create the monitor'],kumaSt:['Uptime Kuma: {0}','Uptime Kuma: {0}'],ksUp:['attivo','up'],ksDown:['non raggiungibile','down'],ksPending:['in attesa','pending'],ksMaintenance:['manutenzione','maintenance'],ksPaused:['in pausa','paused'],ksNone:['in attesa del primo controllo','waiting for the first check'],kIp:['Cambio IP','IP change'],tableScrollHint:['Su schermi piccoli, scorri orizzontalmente la tabella per vedere tutte le colonne.','On small screens, scroll horizontally to see all columns.']};
 const I={it:{},en:{}};for(const[k,[a,b]]of Object.entries(T)){I.it[k]=a;I.en[k]=b}
 
 let LANG='';try{LANG=localStorage.getItem('lang')||''}catch(e){}
@@ -105,6 +105,8 @@ const icon=(k,auto,label)=>`<svg class="ic${k?'':' none'}${auto?' auto':''}" vie
 const typeName=k=>tx((DATA?.types||{})[k])||k;
 const iconFor=d=>icon(d.kind,d.kind_auto,d.kind?typeName(d.kind)+(d.kind_auto?' '+t('suggestedTag'):''):t('unclassifiedIcon'));
 const kindLabel=d=>d.kind?typeName(d.kind)+(d.kind_auto?' (?)':''):'';
+const KST={up:'ksUp',down:'ksDown',pending:'ksPending',maintenance:'ksMaintenance',paused:'ksPaused'};
+const kdot=d=>{const k=d.kuma;if(!DATA?.kuma?.enabled||!k?.enabled||!k.monitor)return '';const st=k.status||'none',lbl=t('kumaSt',t(KST[st]||'ksNone'));return `<span class="kdot k-${esc(st)}" role="img" title="${esc(lbl)}" aria-label="${esc(lbl)}"></span>`};
 const rates=d=>d.tx==null&&d.rx==null?'—':`${fmt(d.tx)} / ${fmt(d.rx)} Mbps`;
 const notice=(k,cls)=>`<div class="notice${cls?' '+cls:''}">${esc(t(k))}</div>`;
 
@@ -139,7 +141,7 @@ function copyButton(value,kind){if(value==null||value==='')return '';const key=k
 
 function copyCell(value,kind){return value?`<span class="copy-cell"><span class="copy-value">${esc(value)}</span>${copyButton(value,kind)}</span>`:'<span class="muted">—</span>'}
 
-function card(d){return `<div class="device${d.connected?'':' off'}" data-mac="${esc(d.mac)}" tabindex="0" role="button"><div class="dtop"><span class="dname" title="${esc(d.name)}">${iconFor(d)}${esc(d.name||t('noLabel'))}</span>${badge(d.rssi)}</div><div class="dmeta dmeta-copy"><span>IP · ${esc(d.ip||t('noIP'))}</span>${copyButton(d.ip,'ip')}</div><div class="dmeta dmeta-copy"><span>MAC · ${esc(d.mac)}</span>${copyButton(d.mac,'mac')}</div><div class="dmeta">${esc([d.connected?(tx(d.via)||d.band):seen(d.last_seen),d.room,kindLabel(d)].filter(Boolean).join(' · '))}</div></div>`}
+function card(d){return `<div class="device${d.connected?'':' off'}" data-mac="${esc(d.mac)}" tabindex="0" role="button"><div class="dtop"><span class="dname" title="${esc(d.name)}">${iconFor(d)}${esc(d.name||t('noLabel'))}${kdot(d)}</span>${badge(d.rssi)}</div><div class="dmeta dmeta-copy"><span>IP · ${esc(d.ip||t('noIP'))}</span>${copyButton(d.ip,'ip')}</div><div class="dmeta dmeta-copy"><span>MAC · ${esc(d.mac)}</span>${copyButton(d.mac,'mac')}</div><div class="dmeta">${esc([d.connected?(tx(d.via)||d.band):seen(d.last_seen),d.room,kindLabel(d)].filter(Boolean).join(' · '))}</div></div>`}
 const grp=(cls,title,list)=>list.length?`<div class="group ${cls}"><h3>${title} <span>· ${list.length}</span></h3><div class="device-grid">${list.map(card).join('')}</div></div>`:'';
 let VIEW='net',FSIG='';try{VIEW=localStorage.getItem('view')||'net'}catch(e){}
 
@@ -180,15 +182,18 @@ function drawTable(){if(!DATA)return;const q=$('filter').value.toLowerCase(),cf=
   ds.sort(compareRows);
  document.querySelectorAll('#head th').forEach(th=>{const b=th.querySelector('button');if(!b)return;const on=b.dataset.k===sortKey;th.setAttribute('aria-sort',on?(sortDir>0?'ascending':'descending'):'none');b.textContent=b.textContent.replace(/ [▲▼]$/,'')+(on?(sortDir>0?' ▲':' ▼'):'')});
  $('shown').textContent=t(ds.length===1?'devOne':'devMany',ds.length);
- $('rows').innerHTML=ds.length?ds.map(d=>`<tr class="${d.connected?'':'off'}" data-mac="${esc(d.mac)}" tabindex="0"><td><b>${esc(d.name||'—')}</b> <button type="button" class="rename" title="${esc(t('renameTitle'))}" aria-label="${esc(t('renameAria',d.name||d.mac))}">✎</button></td><td><span class="status-pill ${d.connected?'online':'offline'}">${esc(t(d.connected?'statusOnline':'statusOffline'))}</span></td><td>${copyCell(d.ip,'ip')}</td><td>${copyCell(d.mac,'mac')}</td><td title="${d.kind_auto?esc(t('suggestedRow')):''}">${iconFor(d)}${esc(kindLabel(d)||'—')}</td><td>${esc(d.room||'—')}</td><td>${esc(link(d))}</td><td>${esc(d.connected?(tx(d.via)||d.band||'—'):'—')}</td><td>${esc(d.ssid||'—')}</td><td>${badge(d.rssi)}</td><td>${fmt(d.tx)}</td><td>${fmt(d.rx)}</td></tr>`).join(''):`<tr><td class="empty-cell" colspan="12">${esc(t('noResults'))}</td></tr>`}
+ $('rows').innerHTML=ds.length?ds.map(d=>`<tr class="${d.connected?'':'off'}" data-mac="${esc(d.mac)}" tabindex="0"><td><b>${esc(d.name||'—')}</b> <button type="button" class="rename" title="${esc(t('renameTitle'))}" aria-label="${esc(t('renameAria',d.name||d.mac))}">✎</button></td><td><span class="status-pill ${d.connected?'online':'offline'}">${esc(t(d.connected?'statusOnline':'statusOffline'))}</span>${kdot(d)}</td><td>${copyCell(d.ip,'ip')}</td><td>${copyCell(d.mac,'mac')}</td><td title="${d.kind_auto?esc(t('suggestedRow')):''}">${iconFor(d)}${esc(kindLabel(d)||'—')}</td><td>${esc(d.room||'—')}</td><td>${esc(link(d))}</td><td>${esc(d.connected?(tx(d.via)||d.band||'—'):'—')}</td><td>${esc(d.ssid||'—')}</td><td>${badge(d.rssi)}</td><td>${fmt(d.tx)}</td><td>${fmt(d.rx)}</td></tr>`).join(''):`<tr><td class="empty-cell" colspan="12">${esc(t('noResults'))}</td></tr>`}
 
 function openEdit(mac){const d=DATA?.devices.find(x=>x.mac===mac);if(!d)return;$('dlg').dataset.mac=mac;$('dlgMac').textContent=mac;$('dlgName').value=d.name||'';
  $('dlgKind').innerHTML=`<option value="">${esc(t('kindAuto'))}</option>`+Object.keys(DATA.types||{}).map(k=>`<option value="${esc(k)}">${esc(typeName(k))}</option>`).join('');
  $('dlgKind').value=d.kind_auto?'':(d.kind||'');$('dlgHint').textContent=d.kind_auto?t('hintSuggested',typeName(d.kind)):'';
- $('dlgRoom').value=d.room||'';$('dlg').showModal();$('dlgName').select()}
+ $('dlgRoom').value=d.room||'';const k=d.kuma||{},kb=$('dlgKumaBox');kb.hidden=!DATA?.kuma?.enabled;
+ const cn={ping:'kcPing',alexa:'kcAlexa',shelly:'kcShelly'};$('dlgKumaCheck').innerHTML=`<option value="">${esc(t('kcAuto',t(cn[k.check_auto]||'kcPing')))}</option>`+Object.entries(cn).map(([v,l])=>`<option value="${v}">${esc(t(l))}</option>`).join('');
+ $('dlgKumaCheck').value=k.check_set||'';$('dlgKuma').checked=!!k.enabled;$('dlgKuma').dataset.touched='';$('dlgKuma').dataset.stored=k.enabled_set==null?'':String(k.enabled_set);
+ $('dlgKumaHint').textContent=k.enabled_set==null?t(k.enabled?'kumaAutoOn':'kumaAutoOff'):'';$('dlg').showModal();$('dlgName').select()}
 
-async function saveEdit(){const mac=$('dlg').dataset.mac,name=$('dlgName').value,type=$('dlgKind').value,room=$('dlgRoom').value,j=b=>({method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
- try{await Promise.all([api('/api/names/'+encodeURIComponent(mac),j({name})),api('/api/meta/'+encodeURIComponent(mac),j({type,room}))]);
+async function saveEdit(){const mac=$('dlg').dataset.mac,name=$('dlgName').value,type=$('dlgKind').value,room=$('dlgRoom').value,kc=$('dlgKuma'),stored=kc.dataset.stored,kuma={enabled:kc.dataset.touched?kc.checked:(stored===''?null:stored==='true'),check:$('dlgKumaCheck').value},j=b=>({method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+ try{await Promise.all([api('/api/names/'+encodeURIComponent(mac),j({name})),api('/api/meta/'+encodeURIComponent(mac),j({type,room,...($('dlgKumaBox').hidden?{}:{kuma})}))]);
   const d=DATA.devices.find(x=>x.mac===mac);if(d){if(name.trim())d.name=name.trim();d.room=room.trim();if(type){d.kind=type;d.kind_auto=false}else if(!d.kind_auto)d.kind=null}
   fillFilters();drawTopology();drawTable();setTimeout(refresh,8000)}catch(e){$('errors').innerHTML=notice('saveFailed')}}
 
@@ -196,7 +201,7 @@ async function applySuggestions(){if(!confirm(t('confirmApply')))return;
  try{await api('/api/meta/apply-suggestions',{method:'POST'});for(const d of DATA.devices)d.kind_auto=false;fillFilters();drawTopology();drawTable();setTimeout(refresh,8000)}catch(e){$('errors').innerHTML=notice('opFailed')}}
 
 async function loadHistory(){const {mac,hours}=hist;try{const [r,e]=await Promise.all([api(`/api/history?mac=${encodeURIComponent(mac)}&hours=${hours}`),api(`/api/events?mac=${encodeURIComponent(mac)}&hours=${hours}`).catch(()=>({events:[]}))]);hist.res=r;hist.events=e.events||[];drawChart(r)}catch(e){hist.res=null}}
-let evHours=24;const KIND={move_ap:['kMoveAp','mid'],move_band:['kMoveBand','mid'],connect:['kConnect','good'],disconnect:['kDisconnect','bad']};
+let evHours=24;const KIND={move_ap:['kMoveAp','mid'],move_band:['kMoveBand','mid'],connect:['kConnect','good'],disconnect:['kDisconnect','bad'],ip:['kIp','mid']};
 
 async function loadEvents(){try{EV=await api(`/api/events?hours=${evHours}`);drawEvents(EV)}catch(e){$('evList').innerHTML=`<tr><td colspan="4" class="bad">${esc(t('evUnavailable'))}</td></tr>`}}
 
@@ -258,6 +263,7 @@ $('typeFilter').addEventListener('change',drawTable);$('roomFilter').addEventLis
 $('editHist').addEventListener('click',()=>{if(hist.mac&&hist.mac!=='opal:uplink')openEdit(hist.mac)});
 $('viewSel').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;VIEW=b.dataset.v;try{localStorage.setItem('view',VIEW)}catch(x){}syncView();drawTopology()});
 $('langSel').addEventListener('click',e=>{const b=e.target.closest('button');if(b&&b.dataset.l!==LANG)setLang(b.dataset.l)});
+$('dlgKuma').addEventListener('change',()=>{$('dlgKuma').dataset.touched='1';$('dlgKumaHint').textContent=''});
 $('dlgCancel').addEventListener('click',()=>$('dlg').close('cancel'));
 $('dlg').addEventListener('close',()=>{if($('dlg').returnValue==='ok')saveEdit()});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
