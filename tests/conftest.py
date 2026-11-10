@@ -22,7 +22,7 @@ def A(tmp_path, monkeypatch):
     monkeypatch.setitem(config.CFG, "meta", str(tmp_path / "meta.json"))
     monkeypatch.setattr(builder, "STATE", {"ts": None, "errors": {}, "data": None, "health": None})
     for container in (builder.LAST, builder.ALIAS_LOGGED, database.OFFLINE_ALERTED, database._GOOD, database.CONFIG_ERRORS,
-                      builder.OPAL_MISSING_SINCE):
+                      builder.OPAL_MISSING_SINCE, builder.OPAL_IP):
         container.clear()
     database.init_db()
     return netmap
