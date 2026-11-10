@@ -24,6 +24,8 @@ class FakeKuma:
         self.calls = []
         self.beats = {}
         self.alive = True
+        self.deleted = set()
+        self.since = 0.0
 
     @property
     def listing(self):
@@ -260,3 +262,27 @@ def test_previous_mac_equals_description_is_rewritten(K, cycle):
     run(cycle)
     assert K.monitors[20]["description"] == "MAC(AA:BB:CC:00:00:03)"
     assert sum(kuma.owner(m) == "aa:bb:cc:00:00:03" for m in K.monitors.values()) == 1
+
+
+def test_monitor_deleted_in_kuma_is_forgotten_and_recreated(K, cycle):
+    run(cycle)
+    mac = "aa:bb:cc:00:00:03"
+    old = K.mine()[mac]["id"]
+    del K.monitors[old]          # deleted by hand in Kuma, Netmap told by the deleteMonitorFromList event
+    K.deleted = {old}
+    adds = sum(c[0] == "add" for c in K.calls)
+    run(cycle)
+    assert database.HEALTH["kuma"]["ok"] is True
+    assert mac in K.mine() and sum(c[0] == "add" for c in K.calls) == adds + 1
+
+
+def test_monitor_deleted_while_disconnected_is_forgotten(K, cycle, A):
+    run(cycle)
+    mac = "aa:bb:cc:00:00:03"
+    A.app.test_client().patch(f"/api/meta/{mac}", json=dict(type="camera", kuma=dict(enabled=False)), headers=H)
+    del K.monitors[K.mine()[mac]["id"]]
+    K.since = 10 ** 12           # fresh login after the deletion: its monitor list is complete
+    run(cycle)
+    assert database.HEALTH["kuma"]["ok"] is True
+    assert mac not in K.mine() and mac not in kuma.DONE
+    assert not [c for c in K.calls if c[0] == "pauseMonitor"]

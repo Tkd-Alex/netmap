@@ -33,6 +33,8 @@ class Session:
         self.sio = None
         self.listing = {}     # monitor id → monitor, as last pushed by Kuma
         self.beats = {}       # monitor id → latest heartbeat status
+        self.deleted = set()  # monitor ids Kuma reported as deleted during this session
+        self.since = 0.0      # when this session's (complete) monitor list was received
         self.listed = threading.Event()
 
     @property
@@ -49,6 +51,7 @@ class Session:
         sio.on("heartbeat", self._on_beat)
         sio.on("heartbeatList", self._on_beat_list)
         self.listed.clear()
+        self.deleted = set()
         sio.connect(CFG["kuma_url"], transports=["websocket"], wait_timeout=10)
         self.sio = sio
         res = sio.call("login", {"username": CFG["kuma_user"], "password": CFG["kuma_pass"], "token": ""},
@@ -59,6 +62,7 @@ class Session:
         if not self.listed.wait(TIMEOUT):
             self.close()
             raise RuntimeError("no monitor list received after login")
+        self.since = time.time()
 
     def close(self):
         if self.sio is not None:
@@ -88,6 +92,7 @@ class Session:
         listing = dict(self.listing)
         listing.pop(int(monitor_id), None)
         self.listing = listing
+        self.deleted.add(int(monitor_id))
 
     def _on_beat(self, beat):
         if isinstance(beat, dict) and beat.get("monitorID") is not None:
@@ -252,9 +257,15 @@ def sync(data, now=None):
             if not SESSION.alive:
                 SESSION.connect()
             job, by_mac = Sync(SESSION), managed(SESSION.listing)
-            for mac, (_sig, mid, _ts) in DONE.items():  # our writes (new monitor, its tag) may not be pushed yet
-                if mac not in by_mac:
-                    by_mac[mac] = SESSION.listing.get(mid) or dict(id=mid, active=True, tags=[])
+            for mac, (_sig, mid, ts) in list(DONE.items()):  # our writes (new monitor, its tag) may not be pushed yet
+                if mac in by_mac:
+                    continue
+                if mid in SESSION.listing:
+                    by_mac[mac] = SESSION.listing[mid]
+                elif ts >= SESSION.since and mid not in SESSION.deleted:
+                    by_mac[mac] = dict(id=mid, active=True, tags=[])
+                else:  # deleted in Kuma (the list received at login is complete): forget it, recreate if wanted
+                    DONE.pop(mac, None)
             seen = set()
             for d in data["devices"]:
                 seen.add(d["mac"])
