@@ -19,6 +19,8 @@ WAKE = threading.Event()
 ALIAS_LOGGED = set()
 LAST = {}  # latest valid result for source: {"router": (ts, data), "opal": (ts, data)}
 OPAL_MISSING_SINCE = {}  # Opal MACs temporarily absent from radio sources
+OPAL_IP = {}  # mac → last IP the Opal's ARP table confirmed as fresh (process-local)
+FRESH_ARP = ("REACHABLE", "DELAY", "PROBE", "PERMANENT")
 _started = False
 
 
@@ -46,6 +48,16 @@ def kuma_settings(info, item, source):
                 check=check or auto_check, check_set=check, check_auto=auto_check)
 
 
+def opal_ip(opal, mac, router_ip):
+    """IP of a client behind the Opal. A fresh Opal ARP entry wins and is remembered; a STALE one never
+    replaces the router's IP or an address the Opal confirmed earlier."""
+    ip, state = opal["neigh"].get(mac), opal.get("neigh_state", {}).get(mac)
+    if ip and state in FRESH_ARP:
+        OPAL_IP[mac] = ip
+        return ip
+    return router_ip or OPAL_IP.get(mac) or ip
+
+
 def build(router, opal, names, meta=None, previous=None, now=None, allow_opal_grace=True):
     now = time.time() if now is None else now
     previous_devices = {d["mac"]: d for d in (previous or {}).get("devices", [])}
@@ -69,7 +81,7 @@ def build(router, opal, names, meta=None, previous=None, now=None, allow_opal_gr
         for mac, client in wifi_clients.items():
             item = row(mac)
             item.update(group="opal", rssi=client.get("rssi"), connected=True, ssid=essid, ap_name="GL.iNet Opal",
-                        connection="Wi-Fi 2.4 GHz", ip=item["ip"] or client.get("ip"),
+                        connection="Wi-Fi 2.4 GHz", ip=opal_ip(opal, mac, item["ip"]),
                         tx=client.get("tx") if client.get("tx") is not None else item["tx"],
                         rx=client.get("rx") if client.get("rx") is not None else item["rx"])
         for mac in opal["wired"]:
@@ -77,7 +89,7 @@ def build(router, opal, names, meta=None, previous=None, now=None, allow_opal_gr
                 continue
             item = row(mac)
             item.update(group="opal_wired", rssi=None, tx=None, rx=None, connected=True, ssid="",
-                        ap_name="GL.iNet Opal", connection="RJ45", ip=item["ip"] or opal["neigh"].get(mac))
+                        ap_name="GL.iNet Opal", connection="RJ45", ip=opal_ip(opal, mac, item["ip"]))
         opal_view = table.pop(own, None)  # the Opal itself is not a client (but the router knows which AP it's attached to)
         # Alias: behind the Opal the AX55 may see devices with the Opal's MAC (station without 4addr).
         # Priority: Opal assoclist/wired > alias seen through AX55 > AX55 state (may show "absent").

@@ -1,4 +1,5 @@
 """Data sources: Home Assistant (AX55) over HTTP and the GL.iNet Opal (OpenWrt) over SSH."""
+import ipaddress
 import json
 import re
 import threading
@@ -84,15 +85,42 @@ OPAL = OpalLink()
 ASSOC_RX = re.compile(r"^([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+(-?\d+) dBm(?: / (-?\d+) dBm)?(?:.*?(\d+) ms ago)?", re.M)
 
 
+NEIGH_RANK = {"REACHABLE": 0, "DELAY": 1, "PROBE": 1, "PERMANENT": 2, "NOARP": 2, "STALE": 3}  # lower = fresher
+
+
+def _networks(text):
+    """IPv4 networks the Opal itself has an address in (from `ip -4 addr show`), loopback excluded."""
+    nets = set()
+    for m in re.finditer(r"\binet (\d+\.\d+\.\d+\.\d+/\d+)", text or ""):
+        try:
+            net = ipaddress.ip_interface(m.group(1)).network
+        except ValueError:
+            continue
+        if not net.is_loopback:
+            nets.add(net)
+    return nets
+
+
 def parse_opal(output):
     parts = dict(re.findall(r"##(\w+)\n(.*?)(?=\n##\w+\n|\Z)", output, re.S))
-    neighbors, neigh_state = {}, {}
+    # One IP per MAC: the freshest entry wins (a STALE entry left over from an old lease must not hide the
+    # current one), FAILED/INCOMPLETE entries are ignored, and so are addresses outside the Opal's own
+    # networks (e.g. a device's setup-mode address), which no monitor could reach.
+    nets, best = _networks(parts.get("ADDR")), {}
     for m in re.finditer(r"^(\d+\.\d+\.\d+\.\d+)\s+dev\s+\S+\s+lladdr\s+([0-9a-fA-F:]{17})(.*)$",
                          parts.get("NEIGH", ""), re.M):
-        mac = norm_mac(m.group(2))
-        neighbors[mac] = m.group(1)
-        state = re.search(r"\b(REACHABLE|STALE|DELAY|PROBE|FAILED|PERMANENT|INCOMPLETE|NOARP)\b", m.group(3))
-        neigh_state[mac] = state.group(1) if state else None
+        mac, ip = norm_mac(m.group(2)), m.group(1)
+        found = re.search(r"\b(REACHABLE|STALE|DELAY|PROBE|FAILED|PERMANENT|INCOMPLETE|NOARP)\b", m.group(3))
+        state = found.group(1) if found else None
+        if state in ("FAILED", "INCOMPLETE"):
+            continue
+        if nets and not any(ipaddress.ip_address(ip) in net for net in nets):
+            continue
+        rank = NEIGH_RANK.get(state, 4)
+        if mac not in best or rank < best[mac][0]:
+            best[mac] = (rank, ip, state)
+    neighbors = {mac: ip for mac, (_rank, ip, _state) in best.items()}
+    neigh_state = {mac: state for mac, (_rank, _ip, state) in best.items()}
     assoc_text = parts.get("ASSOC", "")
     matches = list(ASSOC_RX.finditer(assoc_text))
     clients = {}
@@ -142,7 +170,8 @@ def fetch_opal():
     sections = [("AP", f"iwinfo {ap} info"), ("ASSOC", f"iwinfo {ap} assoclist"),
                 ("HOSTAPD", f"ubus call hostapd.{ap} get_clients 2>/dev/null"),
                 ("STA", f"iwinfo {sta} info"), ("MAC", f"cat /sys/class/net/{sta}/address"),
-                ("NEIGH", "ip neigh show; echo; echo '##LOCAL'; cat /sys/class/net/*/address 2>/dev/null")]
+                ("NEIGH", "ip neigh show; echo; echo '##ADDR'; ip -4 addr show 2>/dev/null; echo; echo '##LOCAL'; "
+                          "cat /sys/class/net/*/address 2>/dev/null")]
     if CFG["lan_ifs"]:
         br = CFG["bridge"]
         sections += [("FDB", f"bridge fdb show 2>/dev/null || brctl showmacs {br} 2>/dev/null"),

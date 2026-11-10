@@ -247,3 +247,34 @@ def test_log_language_defaults_to_english_and_labels_are_neutral(A):
     assert config.LOG_LANG == "en" and str(config.msg("ciao", "hello")) == "hello" and config.L("ciao", "hello") == "hello"
     assert set(config.LABEL.values()) >= {"AX55 · wired", "Opal · wired", "undetermined"}   # neutral tokens, translated by the page
     assert json.loads(json.dumps(config.msg("ciao", "hello"))) == {"it": "ciao", "en": "hello"}
+
+
+# ───────────── Opal ARP entries → client IP
+def test_parse_opal_prefers_fresh_in_subnet_neighbor(A):
+    neigh = ("192.168.10.1 dev br-lan lladdr aa:bb:cc:00:00:01 STALE\n"      # setup-mode address: other subnet
+             "192.168.1.80 dev br-lan lladdr aa:bb:cc:00:00:02 STALE\n"      # old lease…
+             "192.168.1.81 dev br-lan lladdr aa:bb:cc:00:00:02 REACHABLE\n"  # …and the current one
+             "192.168.1.90 dev br-lan lladdr aa:bb:cc:00:00:03 FAILED\n")
+    addr = "5: br-lan: <BROADCAST,UP>\n    inet 192.168.1.254/24 brd 192.168.1.255 scope global br-lan\n" \
+           "1: lo: <LOOPBACK,UP>\n    inet 127.0.0.1/8 scope host lo\n"
+    head, tail = OPAL_OUTPUT.split("##NEIGH\n")[0], OPAL_OUTPUT.split("##LOCAL\n")[1]
+    text = f"{head}##NEIGH\n{neigh}\n##ADDR\n{addr}\n##LOCAL\n{tail}"
+    parsed = sources.parse_opal(text)
+    assert "aa:bb:cc:00:00:01" not in parsed["neigh"]
+    assert parsed["neigh"]["aa:bb:cc:00:00:02"] == "192.168.1.81" and parsed["neigh_state"]["aa:bb:cc:00:00:02"] == "REACHABLE"
+    assert "aa:bb:cc:00:00:03" not in parsed["neigh"]
+    assert "94:00:00:00:00:07" in parsed["local_macs"]  # the ##LOCAL section is still parsed after ##ADDR
+
+
+def test_parse_opal_without_addr_section_keeps_all_subnets(A):
+    assert sources.parse_opal(OPAL_OUTPUT)["neigh"]["aa:bb:cc:00:00:09"] == "192.0.2.220"
+
+
+def test_stale_opal_arp_never_replaces_a_confirmed_ip(A):
+    mac = "aa:bb:cc:00:00:05"
+    fresh = dict(neigh={mac: "192.168.1.60"}, neigh_state={mac: "REACHABLE"})
+    stale = dict(neigh={mac: "192.168.1.61"}, neigh_state={mac: "STALE"})
+    assert builder.opal_ip(stale, mac, None) == "192.168.1.61"            # nothing better known yet
+    assert builder.opal_ip(fresh, mac, "192.168.1.50") == "192.168.1.60"  # fresh ARP beats the router's tracker
+    assert builder.opal_ip(stale, mac, None) == "192.168.1.60"            # stale entry: keep the confirmed IP
+    assert builder.opal_ip(stale, mac, "192.168.1.50") == "192.168.1.50"  # router IP before a stale entry
