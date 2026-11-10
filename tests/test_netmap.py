@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 import builder
 import config
 import database
@@ -278,3 +280,29 @@ def test_stale_opal_arp_never_replaces_a_confirmed_ip(A):
     assert builder.opal_ip(fresh, mac, "192.168.1.50") == "192.168.1.60"  # fresh ARP beats the router's tracker
     assert builder.opal_ip(stale, mac, None) == "192.168.1.60"            # stale entry: keep the confirmed IP
     assert builder.opal_ip(stale, mac, "192.168.1.50") == "192.168.1.50"  # router IP before a stale entry
+
+
+# ───────────── Home Assistant answers but the router integration is down
+def test_ha_trackers_without_valid_devices_are_a_router_failure(A, monkeypatch):
+    monkeypatch.setitem(config.CFG, "ha_url", "http://ha.invalid:8123")
+    monkeypatch.setitem(config.CFG, "ha_token", "placeholder")
+    lost = [dict(state="unavailable", attributes=dict(friendly_name=f"tracker {i}", source_type="router"))
+            for i in range(3)]  # what HA returns while the AX55 web UI has kicked the integration out
+    monkeypatch.setattr(sources, "_ha_trackers", lambda: (lost, "template", 1024, None))
+    with pytest.raises(RuntimeError, match="none valid|nessuno valido"):
+        sources.fetch_home_assistant()
+
+
+def test_empty_router_answer_keeps_last_data_and_marks_cycle_unclean(A, cycle, monkeypatch):
+    phone = "aa:bb:cc:00:00:01"
+    assert cycle([tracker(phone, "Phone", "192.168.1.50")])["clean"] is True
+    monkeypatch.setitem(config.CFG, "ha_url", "http://ha.invalid:8123")
+    monkeypatch.setitem(config.CFG, "ha_token", "placeholder")
+    monkeypatch.setattr(sources, "_ha_trackers", lambda: ([dict(state="unavailable", attributes={})], "template", 10, None))
+    monkeypatch.setattr(builder, "fetch_home_assistant", sources.fetch_home_assistant)
+    monkeypatch.setattr(builder, "fetch_opal", lambda: opal())
+    builder.collect()
+    data = builder.STATE["data"]
+    assert data["clean"] is False and "router" in data["stale"]        # downstream (e.g. Kuma) is skipped
+    assert any(d["mac"] == phone and d["connected"] for d in data["devices"])  # no false "gone"
+    assert database.HEALTH["router"]["ok"] is False

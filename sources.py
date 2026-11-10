@@ -267,6 +267,11 @@ def fetch_home_assistant():
             ap_name=str(attrs.get("ap_name") or "").lstrip("* "), signal=attrs.get("signal"),
             active=entity.get("state") == "home", tx=_ha_rate_mbps(attrs.get("tx_rate")),
             rx=_ha_rate_mbps(attrs.get("rx_rate")), ssid=attrs.get("ssid") or ""))
+    if not devices:  # e.g. the router integration lost its session (AX55 web UI login): not "everyone left"
+        raise RuntimeError(L(f"Home Assistant: {len(entities)} tracker ricevuti ma nessuno valido "
+                             "(integrazione del router non disponibile?)",
+                             f"Home Assistant: {len(entities)} trackers received but none valid "
+                             "(router integration unavailable?)"))
     kb = f"{size / 1024:.0f}"
     detail = (msg(f"{len(entities)} tracker ricevuti, {len(devices)} validi · template · {kb} KB",
                   f"{len(entities)} trackers received, {len(devices)} valid · template · {kb} KB")
