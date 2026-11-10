@@ -233,7 +233,7 @@ Set `KUMA_URL`, `KUMA_USERNAME` and `KUMA_PASSWORD` in `.env`. Kuma API keys onl
 - keeps the tags in sync: `netmap`, room, confirmed type and connection (Wi-Fi band / wired / Opal), reusing existing Kuma tags with the same name;
 - picks the check: **Shelly** → JSON query on `http://<ip>/rpc/Shelly.GetStatus`, `$number(wifi.rssi) > -70`; **Alexa/Echo/Amazon** → TCP port 1080; anything else → ping. You can override it per device.
 
-The switch defaults to on for the types in `KUMA_DEFAULT_TYPES` (cameras, network gear, lights/plugs) and for Alexa/Shelly devices. Turning it off **pauses** the monitor; Netmap never deletes monitors and never touches monitors without both the `netmap` tag and the `MAC(…)` description. Sync only runs when every source answered, so a router outage cannot rewrite addresses. Cards and table rows show a small dot with the Kuma status, and Kuma appears in the diagnostics panel and in `/api/health`.
+The switch defaults to on for the types in `KUMA_DEFAULT_TYPES` (cameras, network gear, lights/plugs) and for Alexa/Shelly devices. Turning it off **pauses** the monitor (as does a device no source reports any more); Netmap tags its own pauses `netmap-paused` and resumes them when the device is back and switched on, while monitors you pause by hand in Kuma stay paused; Netmap never deletes monitors and never touches monitors without both the `netmap` tag and the `MAC(…)` description. Sync only runs when every source answered, so a router outage cannot rewrite addresses. Cards and table rows show a small dot with the Kuma status, and Kuma appears in the diagnostics panel and in `/api/health`.
 
 ## API
 

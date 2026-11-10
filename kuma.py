@@ -4,6 +4,8 @@ A monitor is Netmap's only if it has the "netmap" tag AND its description is "MA
 Netmap never edits, pauses or deletes any other monitor, and never deletes a monitor at all: opted-out
 or vanished devices are paused. Removing the "netmap" tag by hand releases a monitor from Netmap.
 On managed monitors Netmap owns the name, address, check settings and tags.
+A pause made by Netmap carries the "netmap-paused" tag, so it is undone (even after a restart) as soon as the
+device is opted in and reported again; a monitor paused by hand has no such tag and stays paused.
 """
 import re
 import threading
@@ -16,11 +18,12 @@ MARK = re.compile(r"^MAC\(([0-9A-F]{2}(?::[0-9A-F]{2}){5})\)$", re.M)
 PREVIOUS = re.compile(r"^MAC=([0-9A-F]{2}(?::[0-9A-F]{2}){5})$", re.M)  # second format (with tag): rewritten too
 LEGACY = re.compile(r"^netmap:([0-9a-f]{2}(?::[0-9a-f]{2}){5})$", re.M)  # first format: adopted, then rewritten
 TAG = "netmap"
+PAUSED_TAG = "netmap-paused"  # marks pauses made by Netmap (vanished/opted-out device), undone automatically
 TYPE_TAG = {"pc": "PC", "server": "Server", "smartphone": "Smartphone", "tv": "Media", "camera": "Camera",
             "luce_presa": "Lights-Plugs", "iot": "IoT", "rete": "Network", "altro": "Other"}
 CONN_TAG = {"wired": "Wired", "w5": "5G", "w2": "2.4G", "iot": "IoT-2.4G", "guest": "Guest",
             "opal": "Opal-2.4G", "opal_wired": "Opal-Wired"}
-COLOR = {"netmap": "#059669", "room": "#DB2777", "type": "#7C3AED", "conn": "#fd7e14"}
+COLOR = {"netmap": "#059669", "room": "#DB2777", "type": "#7C3AED", "conn": "#fd7e14", "paused": "#6B7280"}
 STATUS = {0: "down", 1: "up", 2: "pending", 3: "maintenance"}
 RECHECK = 600   # seconds: a monitor whose desired state did not change is re-read from Kuma at most this often
 TIMEOUT = 15
@@ -193,14 +196,21 @@ class Sync:
     def fetch(self, monitor_id):
         return self.s.call("getMonitor", monitor_id)["monitor"]
 
+    def pause(self, mac, monitor, why):
+        """Pause a monitor and mark the pause as Netmap's, so it can be undone when the device is wanted again."""
+        self.s.call("pauseMonitor", monitor["id"])
+        if not any(t.get("name") == PAUSED_TAG for t in monitor.get("tags") or []):
+            self.s.call("addMonitorTag", self.tag_id(PAUSED_TAG, COLOR["paused"]), monitor["id"], "")
+        DONE.pop(mac, None)  # re-read it as soon as the device is wanted again
+        self.changes.append(f"pause {monitor.get('name')} ({why})")
+
     def device(self, d, monitor, now):
         mac, cfg = d["mac"], d["kuma"]
         was = ENABLED.get(mac)
         ENABLED[mac] = cfg["enabled"]
         if not cfg["enabled"]:
             if monitor and monitor.get("active"):
-                self.s.call("pauseMonitor", monitor["id"])
-                self.changes.append(f"pause {d['name']}")
+                self.pause(mac, monitor, "opted out")
             return
         if monitor is None:
             if not d.get("ip"):
@@ -224,10 +234,11 @@ class Sync:
                          d["name"], current["hostname"], fields["hostname"])
             self.s.call("editMonitor", dict(current, **fields))
             self.changes.append(f"edit {fields['name']}: {', '.join(sorted(diff))}")
-        self.sync_tags(current, desired_tags(d, current))
-        if was is False and not current.get("active"):
-            self.s.call("resumeMonitor", current["id"])  # resumed only when the user switched it back on
+        paused_by_us = any(t.get("name") == PAUSED_TAG for t in current.get("tags") or [])
+        if not current.get("active") and (paused_by_us or was is False):  # a pause made by hand is respected
+            self.s.call("resumeMonitor", current["id"])
             self.changes.append(f"resume {d['name']}")
+        self.sync_tags(current, desired_tags(d, current))  # also drops the PAUSED_TAG marker
         DONE[mac] = (sig, current["id"], now)
 
     def sync_tags(self, monitor, want):
@@ -272,8 +283,7 @@ def sync(data, now=None):
                 job.device(d, by_mac.get(d["mac"]), now)
             for mac, monitor in by_mac.items():  # device no longer known to any source
                 if mac not in seen and monitor.get("active"):
-                    SESSION.call("pauseMonitor", monitor["id"])
-                    job.changes.append(f"pause {monitor.get('name')} (device gone)")
+                    job.pause(mac, monitor, "device gone")
         except Exception as exc:
             SESSION.close()
             message = f"{type(exc).__name__}: {exc}"

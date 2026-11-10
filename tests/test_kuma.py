@@ -286,3 +286,48 @@ def test_monitor_deleted_while_disconnected_is_forgotten(K, cycle, A):
     assert database.HEALTH["kuma"]["ok"] is True
     assert mac not in K.mine() and mac not in kuma.DONE
     assert not [c for c in K.calls if c[0] == "pauseMonitor"]
+
+
+def restart():
+    """Netmap restarted: its in-memory sync state is gone, only what is stored in Kuma remains."""
+    kuma.DONE.clear()
+    kuma.ENABLED.clear()
+
+
+def tag_names(monitor):
+    return {t["name"] for t in monitor["tags"]}
+
+
+def test_monitor_paused_for_a_vanished_device_resumes_when_it_returns(K, cycle):
+    run(cycle)
+    mac = "aa:bb:cc:00:00:03"
+    run(cycle, [d for d in DEVICES if d["mac"] != mac])  # e.g. the router briefly reported nothing for it
+    mon = K.mine()[mac]
+    assert mon["active"] is False and kuma.PAUSED_TAG in tag_names(mon)
+    restart()
+    run(cycle)
+    mon = K.mine()[mac]
+    assert mon["active"] is True and kuma.PAUSED_TAG not in tag_names(mon)
+
+
+def test_opt_in_after_restart_resumes_a_monitor_paused_by_netmap(K, cycle, A):
+    run(cycle)
+    client, mac = A.app.test_client(), "aa:bb:cc:00:00:01"
+    client.patch(f"/api/meta/{mac}", headers=H, json={"kuma": {"enabled": False}})
+    run(cycle)
+    assert K.mine()[mac]["active"] is False
+    restart()
+    client.patch(f"/api/meta/{mac}", headers=H, json={"kuma": {"enabled": True}})
+    run(cycle)
+    assert K.mine()[mac]["active"] is True
+
+
+def test_manual_pause_survives_vanish_return_and_restart(K, cycle):
+    run(cycle)
+    mac = "aa:bb:cc:00:00:03"
+    K.mine()[mac]["active"] = False  # paused by hand in Kuma: no marker tag
+    run(cycle, [d for d in DEVICES if d["mac"] != mac])
+    restart()
+    run(cycle)
+    mon = K.mine()[mac]
+    assert mon["active"] is False and kuma.PAUSED_TAG not in tag_names(mon)
