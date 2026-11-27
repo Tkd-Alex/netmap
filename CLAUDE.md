@@ -4,7 +4,7 @@
 
 ## 1. Purpose
 
-Netmap is a self-hosted dashboard for discovering and monitoring devices on a home network. It combines information from a TP-Link Archer AX55 exposed through Home Assistant and, optionally, a GL.iNet/OpenWrt access point (currently an Opal) queried over SSH.
+Netmap is a self-hosted dashboard for discovering and monitoring devices on a home network. It combines information from a TP-Link Archer AX55 exposed through Home Assistant and, optionally, a GL.iNet/OpenWrt access point (currently an Opal) read from its `netstatus` JSON endpoint over HTTP or queried over SSH.
 
 The UI provides a network topology, a searchable/sortable device inventory, quick-copy IP/MAC controls, per-device signal history, AP/band/connectivity event history, device labels and type/room metadata, source diagnostics, and a health endpoint suitable for Uptime Kuma. The frontend supports Italian and English plus dark and light themes.
 
@@ -15,7 +15,7 @@ Netmap is a home-network inventory and monitoring dashboard, not a general-purpo
 - **Backend:** Python, Flask, Requests, SQLite.
 - **Production HTTP server:** Waitress. Flask's built-in server is suitable for development.
 - **Router source:** Home Assistant HTTP API (`HA_URL`, `HA_TOKEN`).
-- **Optional AP source:** SSH via Paramiko to GL.iNet/OpenWrt.
+- **Optional AP source:** GL.iNet/OpenWrt, via HTTP (`netstatus.json`, schema 2) or SSH via Paramiko.
 - **Frontend:** server-rendered HTML template plus `static/css/netmap.css` and `static/js/netmap.js` (vanilla JavaScript); no frontend build step is required.
 - **Persistence:** SQLite for signal samples, events, and first/last-seen state; JSON files for labels and device metadata.
 - **Runtime model:** one application process with a background polling thread. The worker and in-memory state are process-local, so do not run multiple worker-enabled application processes for the same instance without redesigning this model.
@@ -25,7 +25,7 @@ The default poll interval is 30 seconds, with a minimum of 10 seconds. The worke
 ### Data sources and reconciliation
 
 1. **Home Assistant / Archer AX55** provides the primary router/device view and related connection, band, and extender information.
-2. **GL.iNet Opal / OpenWrt** is optional and enabled when `OPAL_HOST` is non-empty. Netmap uses SSH and keeps a persistent session to avoid reconnecting every poll. Interface names, bridge, and wired LAN details are configurable.
+2. **GL.iNet Opal / OpenWrt** is optional and enabled when `OPAL_HOST` is non-empty. `OPAL_SOURCE` selects the transport: `http` reads `netstatus.json` (published by a service on the Opal, already parsed into JSON; `opal_from_netstatus()` converts it into the same dict `parse_opal()` returns, plus `checks`), `ssh` runs commands over a persistent SSH session, and `auto` (default) uses HTTP and falls back to SSH when the endpoint fails or its data is stale (`error` field, schema ≠ 2, or `time` older than 3 × `interval`), retrying HTTP every 5 minutes. Netmap's ARP/subnet/wired rules (`_pick_neighbors`, `OPAL_LAN_IF`) apply to both transports. Failed netstatus checks become `opal_check` alerts and `opal_checks_failed` in `/api/health` (they do not make the health status degraded). Interface names, bridge, and wired LAN details are configurable for SSH.
 3. Devices behind a repeater/AP may appear on the main router under the repeater's MAC rather than their own MAC. Source-aware reconciliation is therefore important.
 4. SQLite stores time-series samples and events. RSSI history exists only when a signal value is available; wired devices normally do not have RSSI.
 
@@ -43,7 +43,7 @@ Typical project files:
 
 - `app.py` — Flask application, request guard, API routes, static asset version, and worker start-up.
 - `config.py` — environment configuration, constants (`GROUP`, `LABEL`, `BAND`, `TYPES`), type suggestions, bilingual `L()`/`msg()`, and logging setup.
-- `sources.py` — Home Assistant HTTP client and the persistent Opal SSH session with its output parsing.
+- `sources.py` — Home Assistant HTTP client; Opal netstatus HTTP client and the persistent Opal SSH session with its output parsing, plus the `OPAL_SOURCE` dispatcher.
 - `database.py` — names/meta JSON storage, SQLite helpers (schema, history, seen, pruning, stats), offline alerts, and `HEALTH`.
 - `builder.py` — device map building, event detection, data collection, the shared `STATE`, and the polling worker.
 - `kuma.py` — optional Uptime Kuma sync over Kuma's Socket.IO API (persistent logged-in session, monitor/tag reconciliation, cached heartbeat status).
@@ -66,6 +66,8 @@ Configuration is read from environment variables. `config.py` attempts to load `
 | `HA_TOKEN` | Home Assistant long-lived access token | Secret; required for HA access |
 | `HA_VERIFY_SSL` | Verify HA TLS certificates | `true` |
 | `OPAL_HOST` | Opal/OpenWrt host or IP | Empty disables Opal integration |
+| `OPAL_SOURCE` | Opal transport: `auto`, `http`, or `ssh` | `auto` (HTTP, SSH fallback) |
+| `OPAL_URL` | netstatus endpoint | `http://<OPAL_HOST>/netstatus.json` |
 | `OPAL_PORT` | SSH port | `22` |
 | `OPAL_USER` | SSH username | `root` |
 | `OPAL_PASSWORD` / `OPAL_PASS` | SSH password | Optional; prefer key-based auth where practical |
@@ -117,7 +119,7 @@ The frontend uses same-origin endpoints. Keep the API contract stable unless a c
 |---|---|
 | `GET /` | Render `templates/index.html`, passing the polling interval |
 | `GET /api/data` | Current state (`ts`, `errors`, `data`, `health`); `?since=<timestamp>` may return `{"unchanged": true}` when state has not changed |
-| `GET /api/health` | Health check for Uptime Kuma/other monitors; returns HTTP 200 when healthy and 503 when starting/degraded |
+| `GET /api/health` | Health check for Uptime Kuma/other monitors; returns HTTP 200 when healthy and 503 when starting/degraded; with the netstatus source it also lists `opal_checks_failed` |
 | `GET /api/events?hours=24[&mac=...]` | AP/band/connectivity events; range bounded by retention, at most 300 event rows returned |
 | `POST /api/refresh` | Wake the worker and wait briefly for a new poll cycle |
 | `GET /api/history?mac=<MAC>&hours=24` | Aggregated RSSI history for a device or special `opal:uplink` pseudo-ID |

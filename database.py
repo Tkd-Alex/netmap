@@ -10,10 +10,11 @@ from config import CFG, L, log, LOG_LANG, msg, norm_mac, TYPES, UPLINK_ID
 
 
 # Health status of each source, shown in the "Diagnostics" panel and at /api/health.
+OPAL_LABEL = {"http": "Opal (HTTP)", "ssh": "Opal (SSH)"}.get(CFG["opal_source"], "Opal")  # auto: detail says which
 HEALTH = {key: dict(label=label, ok=None, last_ok=None, last_try=None, duration=None, fails=0,
                     last_error=None, detail="")
-          for key, label in (("router", "Home Assistant · AX55"), ("opal", "Opal (SSH)"), ("db", "Database"),
-                                         ("kuma", "Uptime Kuma"))}
+          for key, label in (("router", "Home Assistant · AX55"), ("opal", OPAL_LABEL), ("db", "Database"),
+                             ("kuma", "Uptime Kuma"))}
 OFFLINE_ALERTED = set()
 
 

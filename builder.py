@@ -192,7 +192,9 @@ def build(router, opal, names, meta=None, previous=None, now=None, allow_opal_gr
                 alerts.append(dict(level="warn", kind="uplink", text=msg(
                     f"L'Opal risulta agganciato a «{via}» invece di «{CFG['uplink_expected']}»",
                     f"The Opal is attached to «{via}» instead of «{CFG['uplink_expected']}»")))
-        elif bssid and bssid != own:  # if BSSID matches the Opal MAC the driver doesn't really report it
+        elif bssid and bssid != own and (CFG["ax_macs"] or CFG["re_macs"]):
+            # If the BSSID matches the Opal MAC the driver doesn't really report it (iwinfo over SSH); netstatus
+            # reports the real one. Without AX55_MAC/RE700X_MAC there is nothing to compare it with.
             mid = bssid[3:14]
             uplink = ("AX55" if any(m[3:14] == mid for m in CFG["ax_macs"]) else
                       "RE700X" if any(m[3:14] == mid for m in CFG["re_macs"]) else "other AP")
@@ -204,7 +206,13 @@ def build(router, opal, names, meta=None, previous=None, now=None, allow_opal_gr
             alerts.append(dict(level="warn", kind="uplink", text=msg(f"Uplink dell'Opal debole ({sta['signal']} dBm)",
                                                                      f"Opal uplink is weak ({sta['signal']} dBm)")))
         snr = sta["signal"] - sta["noise"] if sta.get("signal") is not None and sta.get("noise") is not None else None
-        opal_out = dict(ap=opal["ap"], sta=sta, uplink=uplink, own_mac=own, snr=snr)
+        checks = opal.get("checks")  # only with netstatus (HTTP): the Opal's stable settings
+        for c in (checks or {}).get("failed", []):
+            label = c["label"] or c["id"]
+            alerts.append(dict(level="bad" if c["level"] == "critical" else "warn", kind="opal_check", check=c["id"],
+                               text=msg(f"Opal: controllo «{label}» fallito (atteso {c['expected']}, trovato {c['actual']})",
+                                        f"Opal: check «{label}» failed (expected {c['expected']}, got {c['actual']})")))
+        opal_out = dict(ap=opal["ap"], sta=sta, uplink=uplink, own_mac=own, snr=snr, checks=checks)
     return dict(router=dict(fw=router.get("fw")), opal=opal_out, devices=devices, alerts=alerts,
                 thresholds=dict(good=CFG["rssi_good"], warn=CFG["rssi_warn"]), aliases=aliases, types=TYPES)
 
@@ -298,6 +306,7 @@ def log_changes(prev, data, events):
             log.info(L("%s: %s da «%s» a «%s»", "%s: %s from «%s» to «%s»"),
                      L("Cambio AP", "AP change") if e[3] == "move_ap" else L("Cambio banda/rete", "Band/network change"),
                      e[2] or e[1], e[4], e[5])
+    log_opal_checks(prev, data)
     old, new = (prev.get("opal") or {}).get("sta", {}), (data.get("opal") or {}).get("sta", {})
     old_up, new_up = (prev.get("opal") or {}).get("uplink"), (data.get("opal") or {}).get("uplink")
     if old_up and new_up and old_up != new_up:
@@ -305,6 +314,24 @@ def log_changes(prev, data, events):
     elif old.get("bssid") and new.get("bssid") and old["bssid"] != new["bssid"]:
         log.warning(L("BSSID dell'uplink Opal cambiato: %s → %s", "Opal uplink BSSID changed: %s → %s"),
                     old["bssid"], new["bssid"])
+
+
+def _failed_checks(data):
+    checks = (data.get("opal") or {}).get("checks")
+    return None if checks is None else {c["id"]: c for c in checks["failed"]}
+
+
+def log_opal_checks(prev, data):
+    """Log when one of the Opal's netstatus checks starts failing or recovers (HTTP source only)."""
+    before, after = _failed_checks(prev), _failed_checks(data)
+    if before is None or after is None:
+        return
+    for cid in sorted(set(after) - set(before)):
+        c = after[cid]
+        log.warning(L("Opal: controllo %s FALLITO · %s (atteso %s, trovato %s)",
+                      "Opal: check %s FAILED · %s (expected %s, got %s)"), cid, c["label"], c["expected"], c["actual"])
+    for cid in sorted(set(before) - set(after)):
+        log.info(L("Opal: controllo %s di nuovo ok", "Opal: check %s ok again"), cid)
 
 
 def _source_summary(key, name):
@@ -411,7 +438,9 @@ def start_worker():
         _started = True
         setup_logging()
         lan = ",".join(CFG["lan_ifs"]) or "—"
-        opal = (f"Opal {CFG['opal_user']}@{CFG['opal_host']}:{CFG['opal_port']} "
+        ssh = f"SSH {CFG['opal_user']}@{CFG['opal_host']}:{CFG['opal_port']}"
+        how = {"http": f"HTTP {CFG['opal_url']}", "ssh": ssh}.get(CFG["opal_source"], f"HTTP {CFG['opal_url']}, {ssh}")
+        opal = (f"Opal {CFG['opal_source']} ({how}) "
                 + L(f"(AP {CFG['ap_if']}, uplink {CFG['sta_if']}, porte LAN {lan})",
                     f"(AP {CFG['ap_if']}, uplink {CFG['sta_if']}, LAN ports {lan})")) if CFG["opal_host"] \
             else L("Opal disattivato", "Opal disabled")

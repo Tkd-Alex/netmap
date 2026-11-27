@@ -47,7 +47,7 @@ flowchart LR
     end
 
     netmap -- "HTTP API · token" --> ha
-    netmap -- "SSH · iwinfo, ubus, ip neigh, bridge" --> opal
+    netmap -- "HTTP · netstatus.json (or SSH · iwinfo, ubus, ip neigh, bridge)" --> opal
     browser["Browser"] -- "http://host:8080" --> netmap
     kuma["Uptime Kuma"] -- "/api/health" --> netmap
 ```
@@ -63,7 +63,7 @@ sequenceDiagram
     autonumber
     participant W as Worker (every POLL_SECONDS)
     participant HA as Home Assistant
-    participant O as Opal (SSH)
+    participant O as Opal (HTTP or SSH)
     participant B as build()
     participant DB as SQLite
     participant UI as Browser
@@ -121,8 +121,12 @@ Recently vanished Opal clients stay connected for `OPAL_MISSING_GRACE_SECONDS` (
 
 - Python 3.11+ (or Docker).
 - **Home Assistant** with the router's `device_tracker` entities (state `home` = connected). Netmap reads these attributes: `mac`/`mac_address`, `ip`/`ip_address`, `friendly_name`/`host_name`/`hostname`, `connection`, `band`, `ap_name`, `signal`, `tx_rate`, `rx_rate` (kbps), `ssid`, `source_type`. The author uses them with a TP-Link Archer AX55: with another integration you may need to adapt `fetch_home_assistant` and `HA_TEMPLATE` in `app.py`.
-- (Optional) an **OpenWrt/GL.iNet** access point with SSH. It uses `iwinfo`, `ubus call hostapd.<if> get_clients`, `ip neigh` and, for wired devices, `bridge` (the `ip-bridge` package) or `brctl`. Developed on a GL.iNet Opal (GL-SFT1200).
-- **paramiko < 5**: version 5 dropped the SHA-1 `ssh-rsa` host key that older Dropbear servers still use (`requirements.txt` already pins it).
+- (Optional) an **OpenWrt/GL.iNet** access point, read in one of two ways (`OPAL_SOURCE`):
+  - **HTTP** (preferred): the AP publishes its state as JSON with the `netstatus` service (`http://<ap>/netstatus.json`, schema 2, refreshed every 30 s, read-only, no login, LAN only). No SSH key needed. Netmap rejects a document that has an `error` field, a schema other than 2, or a `time` older than 3 × its `interval`. Its checks (driver power save, DTIM, GL repeater manager…) become alerts when one fails, and their ids are listed in `opal_checks_failed` in `/api/health`.
+  - **SSH**: it runs `iwinfo`, `ubus call hostapd.<if> get_clients`, `ip neigh` and, for wired devices, `bridge` (the `ip-bridge` package) or `brctl`.
+
+  With the default `auto` Netmap uses HTTP and falls back to SSH when the endpoint does not answer or its data is stale (then retries HTTP every 5 minutes). Netmap's own rules apply to both: the freshest ARP entry per MAC, only IPs inside the AP's own networks, wired clients only from `OPAL_LAN_IF`/`OPAL_WIRED_MACS`. Developed on a GL.iNet Opal (GL-SFT1200).
+- **paramiko < 5** (SSH only): version 5 dropped the SHA-1 `ssh-rsa` host key that older Dropbear servers still use (`requirements.txt` already pins it).
 
 ## Quick start (development)
 
@@ -152,12 +156,14 @@ Everything is set through environment variables or the `.env` file (see `.env.ex
 | Variable | Default | Description |
 |---|---|---|
 | `HA_URL`, `HA_TOKEN` | – | Home Assistant and its long-lived access token. `HA_VERIFY_SSL=false` for self-signed certificates |
-| `OPAL_HOST` | empty | Secondary AP over SSH; **empty = disabled** |
-| `OPAL_PORT`, `OPAL_USER` | `22`, `root` | |
-| `OPAL_PASSWORD` / `OPAL_KEY` | – | Password (`OPAL_PASS` also accepted) or private key (recommended) |
-| `OPAL_KNOWN_HOSTS` | – | If set the host key is verified, otherwise it is accepted on first contact |
-| `OPAL_AP_IF`, `OPAL_STA_IF` | `wlan0`, `wlan-sta0` | Access point interface and the client interface used for the uplink |
-| `OPAL_LAN_IF`, `OPAL_BRIDGE` | – , `br-lan` | Physical LAN port (e.g. `eth0.1`): MACs seen there are "wired". List the ports with `ls /sys/class/net/br-lan/brif` |
+| `OPAL_HOST` | empty | Secondary AP; **empty = disabled** |
+| `OPAL_SOURCE` | `auto` | `http` = netstatus JSON only, `ssh` = SSH only, `auto` = HTTP first, SSH if it does not answer or its data is stale |
+| `OPAL_URL` | `http://<OPAL_HOST>/netstatus.json` | netstatus endpoint, if different |
+| `OPAL_PORT`, `OPAL_USER` | `22`, `root` | SSH only |
+| `OPAL_PASSWORD` / `OPAL_KEY` | – | SSH only. Password (`OPAL_PASS` also accepted) or private key (recommended) |
+| `OPAL_KNOWN_HOSTS` | – | SSH only. If set the host key is verified, otherwise it is accepted on first contact |
+| `OPAL_AP_IF`, `OPAL_STA_IF` | `wlan0`, `wlan-sta0` | SSH only (netstatus has its own settings). Access point interface and the client interface used for the uplink |
+| `OPAL_LAN_IF`, `OPAL_BRIDGE` | – , `br-lan` | Physical LAN port (e.g. `eth0.1`): MACs seen there are "wired", with both sources. List the ports with `ls /sys/class/net/br-lan/brif`. `OPAL_BRIDGE` is SSH only |
 | `OPAL_WIRED_MACS` | – | Wired MACs listed by hand (alternative to `OPAL_LAN_IF`) |
 | `UPLINK_EXPECTED_AP` | – | Part of the name of the AP the secondary AP must be attached to; alert if different |
 | `EXTENDER_NAMES` | – | Mesh extenders (partial name) to tell them apart in roaming |
@@ -215,14 +221,14 @@ Alerts that refer to a device are clickable and open its history.
 
 ```
 Start · every 30 s · HA http://… · Opal root@…:22 (AP wlan0, uplink wlan-sta0, LAN ports eth0.1) · DB … (14 d) · auth off · log INFO
-Cycle 12 · HA ok 0.04 s (77 trackers received, 74 valid · template · 26 KB) · Opal ok 1.2 s (6 Wi-Fi clients, 1 wired · SSH reused · 5890 B) · 32/73 connected · +19 samples · 1.3 s total
+Cycle 12 · HA ok 0.04 s (77 trackers received, 74 valid · template · 26 KB) · Opal ok 0.03 s (6 Wi-Fi clients, 1 wired · HTTP · data 12 s old · collected in 6.9 s · 10950 B · checks 15/15 ok) · 32/73 connected · +19 samples · 0.1 s total
 AP change: Phone from «AX55 · 5 GHz» to «Opal · 2.4 GHz»
 AX55↔Opal alias: Purifier (192.0.2.220) is seen by the AX55 with the Opal's MAC 94:… → treated as ONLINE behind the Opal
 Offline: Kitchen camera · Kitchen for 12 min (Camera / doorbell)
 Home Assistant · AX55: ERROR · ConnectionError… (attempt #1)
 ```
 
-If an SSH command takes longer than 1 s, `slow: …` appears in the cycle line. For details use `LOG_LEVEL=DEBUG`. Set `NETMAP_LANG=it` for Italian logs.
+Over SSH the Opal part reads `SSH reused · 5890 B` instead, and if a command takes longer than 1 s `slow: …` appears in the cycle line; in `auto` mode a fallback to SSH adds `HTTP unavailable: <reason>`. When a netstatus check fails the log says `Opal: check ps_on FAILED · …` once, and `Opal: check ps_on ok again` when it recovers. For details use `LOG_LEVEL=DEBUG`. Set `NETMAP_LANG=it` for Italian logs.
 
 ## Uptime Kuma sync (optional)
 

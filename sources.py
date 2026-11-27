@@ -1,4 +1,4 @@
-"""Data sources: Home Assistant (AX55) over HTTP and the GL.iNet Opal (OpenWrt) over SSH."""
+"""Data sources: Home Assistant (AX55) over HTTP and the GL.iNet Opal (OpenWrt) over HTTP (netstatus) or SSH."""
 import ipaddress
 import json
 import re
@@ -125,6 +125,11 @@ def _pick_neighbors(entries, nets):
             {mac: state for mac, (_rank, _ip, state) in best.items()})
 
 
+def _local_macs(*groups):
+    local = {norm_mac(m or "") for group in groups for m in group}
+    return sorted(local - {"00:00:00:00:00:00", ""})
+
+
 def parse_opal(output):
     parts = dict(re.findall(r"##(\w+)\n(.*?)(?=\n##\w+\n|\Z)", output, re.S))
     entries = []
@@ -172,15 +177,18 @@ def parse_opal(output):
     except (json.JSONDecodeError, TypeError, ValueError):
         pass
     ap_info, own = _iw_info(parts.get("AP")), norm_mac(parts.get("MAC", "").strip())
-    local = {norm_mac(m) for m in re.findall(r"[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}", parts.get("LOCAL", ""))}
-    local |= {own, norm_mac(ap_info.get("bssid") or "")}
-    local -= {"00:00:00:00:00:00", ""}
+    local = _local_macs(re.findall(r"[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}", parts.get("LOCAL", "")),
+                        (own, ap_info.get("bssid")))
     return dict(ap=ap_info, sta=_iw_info(parts.get("STA")), clients=clients, hostapd_clients=hostapd_clients,
-                hostapd_ok=hostapd_ok, local_macs=sorted(local), neigh=neighbors, neigh_state=neigh_state,
+                hostapd_ok=hostapd_ok, local_macs=local, neigh=neighbors, neigh_state=neigh_state,
                 wired=sorted(wired), own_mac=own)
 
 
-def fetch_opal():
+def _counts(parsed):
+    return len(set(parsed["clients"]) | set(parsed["hostapd_clients"])), len(parsed["wired"])
+
+
+def fetch_opal_ssh():
     ap, sta = CFG["ap_if"], CFG["sta_if"]
     sections = [("AP", f"iwinfo {ap} info"), ("ASSOC", f"iwinfo {ap} assoclist"),
                 ("HOSTAPD", f"ubus call hostapd.{ap} get_clients 2>/dev/null"),
@@ -198,13 +206,166 @@ def fetch_opal():
     ranked = sorted(timings.items(), key=lambda kv: -kv[1])
     slow = [f"{n} {t:.2f} s" for n, t in (ranked[:2] if sum(timings.values()) >= 2 else
                                            [kv for kv in ranked if kv[1] >= 1])]
-    n_wifi, n_wired = len(set(parsed["clients"]) | set(parsed["hostapd_clients"])), len(parsed["wired"])
+    n_wifi, n_wired = _counts(parsed)
     session = ("nuova", "new") if OPAL.new_session else ("riusata", "reused")
     parsed["meta"] = dict(detail=msg(
         f"{n_wifi} client Wi-Fi, {n_wired} cavo · SSH {session[0]} · {len(output)} B"
         + (f" · lenti: {', '.join(slow)}" if slow else ""),
         f"{n_wifi} Wi-Fi clients, {n_wired} wired · SSH {session[1]} · {len(output)} B"
         + (f" · slow: {', '.join(slow)}" if slow else "")))
+    return parsed
+
+
+# ───────────────────────────── Opal (HTTP, netstatus) ─────────────────────────────
+
+NETSTATUS_SCHEMA = 2
+HTTP_RETRY_SECONDS = 300  # auto mode: after an HTTP failure, use SSH for this long before trying HTTP again
+OPAL_HTTP = requests.Session()
+_auto = {"retry_at": 0.0, "reason": None}
+
+
+def _dict(value):
+    return value if isinstance(value, dict) else {}
+
+
+def _list_of_dicts(value):
+    return [x for x in value if isinstance(x, dict)] if isinstance(value, list) else []
+
+
+def _int(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _num(value):
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def check_netstatus(doc, now=None):
+    """Raise if the document cannot be trusted: wrong schema, collector error, or too old (or from the future)."""
+    now = time.time() if now is None else now
+    if not isinstance(doc, dict):
+        raise RuntimeError(L("netstatus: risposta non è un oggetto JSON", "netstatus: answer is not a JSON object"))
+    if doc.get("schema") != NETSTATUS_SCHEMA:
+        raise RuntimeError(L(f"netstatus: schema {doc.get('schema')!r} non supportato (atteso {NETSTATUS_SCHEMA})",
+                             f"netstatus: unsupported schema {doc.get('schema')!r} (expected {NETSTATUS_SCHEMA})"))
+    if doc.get("error"):
+        raise RuntimeError(L(f"netstatus: raccolta fallita sull'Opal: {doc['error']}",
+                             f"netstatus: collection failed on the Opal: {doc['error']}"))
+    stamp, interval = _num(doc.get("time")), _num(doc.get("interval")) or 30
+    if stamp is None:
+        raise RuntimeError(L("netstatus: campo time mancante", "netstatus: missing time field"))
+    age = now - stamp
+    if abs(age) > 3 * interval:
+        raise RuntimeError(L(f"netstatus: dati vecchi di {age:.0f} s (limite {3 * interval:.0f} s)",
+                             f"netstatus: data is {age:.0f} s old (limit {3 * interval:.0f} s)"))
+    return age
+
+
+def opal_from_netstatus(doc):
+    """Convert a netstatus (schema 2) document into the same dict parse_opal() returns, plus "checks".
+
+    netmap's own rules are applied here, not taken from netstatus: freshest ARP state per MAC, only IPs
+    inside the lan.addresses networks, wired clients only from OPAL_LAN_IF (+ OPAL_WIRED_MACS)."""
+    uplink, ap, lan = _dict(doc.get("uplink")), _dict(doc.get("ap")), _dict(doc.get("lan"))
+    nets = set()
+    for a in _list_of_dicts(lan.get("addresses")):
+        try:
+            net = ipaddress.ip_interface(f"{a.get('address')}/{a.get('prefix')}").network
+        except ValueError:
+            continue
+        if not net.is_loopback:
+            nets.add(net)
+    neighbors, neigh_state = _pick_neighbors(
+        ((n.get("ip"), n.get("mac"), n.get("state")) for n in _list_of_dicts(lan.get("neighbors"))), nets)
+
+    clients, hostapd_clients = {}, {}
+    for c in _list_of_dicts(ap.get("clients")):
+        mac = norm_mac(c.get("mac") or "")
+        if not mac or mac == "00:00:00:00:00:00":
+            continue
+        if c.get("in_assoclist"):  # `iwinfo assoclist`: RSSI and rates
+            clients[mac] = dict(rssi=_int(c.get("signal_dbm")), idle_ms=_int(c.get("inactive_ms")),
+                                ip=neighbors.get(mac), tx=_num(_dict(c.get("tx")).get("rate_mbps")),
+                                rx=_num(_dict(c.get("rx")).get("rate_mbps")))
+        if c.get("in_hostapd") and c.get("assoc") is True and c.get("authorized") is True:
+            hostapd_clients[mac] = dict(rssi=None, idle_ms=None, ip=neighbors.get(mac), tx=None, rx=None)
+
+    wired = set(CFG["wired_macs"])
+    if CFG["lan_ifs"]:
+        for e in _list_of_dicts(lan.get("bridge_fdb")):
+            if e.get("local") is False and e.get("ifname") in CFG["lan_ifs"] and e.get("mac"):
+                wired.add(norm_mac(e["mac"]))
+
+    own = norm_mac(uplink.get("mac") or "")
+    # Same keys as _iw_info(). Not in netstatus: the AP's own "signal"/"quality" (meaningless in AP mode) and
+    # the uplink tx power. The uplink BSSID is the real one (wpa_cli), not the Opal's MAC echoed by iwinfo.
+    ap_info = dict(essid=ap.get("ssid"), bssid=norm_mac(ap.get("bssid") or "") or None,
+                   channel=_int(ap.get("channel")), txpower=_int(ap.get("txpower_dbm")), signal=None,
+                   noise=_int(ap.get("noise_dbm")), quality=None)
+    sta_info = dict(essid=uplink.get("ssid"), bssid=norm_mac(uplink.get("bssid") or "") or None,
+                    channel=_int(uplink.get("channel")), txpower=None, signal=_int(uplink.get("signal_dbm")),
+                    noise=_int(uplink.get("noise_dbm")), quality=uplink.get("quality"))
+    local = _local_macs(_dict(lan.get("interfaces")).values(), (own, ap_info["bssid"]))
+
+    checks = _list_of_dicts(doc.get("checks"))
+    failed = [dict(id=c.get("id"), label=c.get("label") or c.get("id"), level=c.get("level") or "critical",
+                   expected=c.get("expected"), actual=c.get("actual"), ref=c.get("ref"))
+              for c in checks if c.get("ok") is False]
+    return dict(ap=ap_info, sta=sta_info, clients=clients, hostapd_clients=hostapd_clients,
+                hostapd_ok=ap.get("hostapd_ok") is True, local_macs=local, neigh=neighbors,
+                neigh_state=neigh_state, wired=sorted(wired), own_mac=own,
+                checks=dict(ok=doc.get("ok") is True, total=len(checks), failed=failed))
+
+
+def fetch_opal_http():
+    r = OPAL_HTTP.get(CFG["opal_url"], timeout=5, headers={"Accept": "application/json"})
+    r.raise_for_status()
+    doc = r.json()
+    age = check_netstatus(doc)
+    parsed = opal_from_netstatus(doc)
+    n_wifi, n_wired = _counts(parsed)
+    took, checks = _num(doc.get("duration_s")), parsed["checks"]
+    failed = ", ".join(c["id"] for c in checks["failed"])
+    parsed["meta"] = dict(detail=msg(
+        f"{n_wifi} client Wi-Fi, {n_wired} cavo · HTTP · dati di {max(0, age):.0f} s fa"
+        + (f" · raccolti in {took:g} s" if took is not None else "") + f" · {len(r.content)} B"
+        + (f" · controlli falliti: {failed}" if failed else f" · controlli {checks['total']}/{checks['total']} ok"),
+        f"{n_wifi} Wi-Fi clients, {n_wired} wired · HTTP · data {max(0, age):.0f} s old"
+        + (f" · collected in {took:g} s" if took is not None else "") + f" · {len(r.content)} B"
+        + (f" · failed checks: {failed}" if failed else f" · checks {checks['total']}/{checks['total']} ok")))
+    return parsed
+
+
+def fetch_opal():
+    """Read the Opal with the transport chosen by OPAL_SOURCE (auto: HTTP first, SSH as a fallback)."""
+    mode = CFG["opal_source"]
+    if mode == "http":
+        return fetch_opal_http()
+    if mode == "ssh":
+        return fetch_opal_ssh()
+    now = time.time()
+    if now >= _auto["retry_at"]:
+        try:
+            parsed = fetch_opal_http()
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            if _auto["reason"] is None:
+                log.warning(L("Opal: netstatus via HTTP non disponibile (%s), uso SSH; nuovo tentativo tra %d s",
+                              "Opal: netstatus over HTTP unavailable (%s), using SSH; retrying in %d s"),
+                            reason, HTTP_RETRY_SECONDS)
+            _auto.update(retry_at=now + HTTP_RETRY_SECONDS, reason=reason)
+        else:
+            if _auto["reason"] is not None:
+                log.info(L("Opal: netstatus via HTTP di nuovo disponibile", "Opal: netstatus over HTTP available again"))
+            _auto.update(retry_at=0.0, reason=None)
+            return parsed
+    try:
+        parsed = fetch_opal_ssh()
+    except Exception as exc:
+        raise RuntimeError(f"HTTP: {_auto['reason']} · SSH: {type(exc).__name__}: {exc}") from exc
+    detail = parsed["meta"]["detail"]
+    parsed["meta"]["detail"] = msg(f"{detail['it']} · HTTP non disponibile: {_auto['reason']}",
+                                   f"{detail['en']} · HTTP unavailable: {_auto['reason']}")
     return parsed
 
 

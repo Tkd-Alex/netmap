@@ -73,8 +73,11 @@ def api_health():
     failing = [k for k, h in state["health"]["sources"].items() if h["ok"] is False]
     age = int(now - state["ts"])
     ok = not failing and age <= CFG["poll"] * 3
+    # Opal settings that drifted (netstatus checks): reported, but they don't make Netmap itself unhealthy.
+    checks = ((state.get("data") or {}).get("opal") or {}).get("checks")
+    extra = {} if checks is None else dict(opal_checks_failed=[c["id"] for c in checks["failed"]])
     return jsonify(status="ok" if ok else "degraded", failing=failing, last_cycle_age_s=age,
-                   cycles=state["health"]["cycle"]), (200 if ok else 503)
+                   cycles=state["health"]["cycle"], **extra), (200 if ok else 503)
 
 
 @app.get("/api/events")

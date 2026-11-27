@@ -58,6 +58,13 @@ def _list(name, default=""):
     return [x.strip() for x in os.getenv(name, default).split(",") if x.strip()]
 
 
+def _choice(name, default, allowed):
+    value = os.getenv(name, default).strip().lower() or default
+    if value not in allowed:
+        raise ValueError(f"Invalid {name}: {value!r} (allowed: {', '.join(allowed)})")
+    return value
+
+
 def _iface(value):
     if not re.fullmatch(r"[\w.-]+", value):
         raise ValueError(f"Invalid interface name: {value!r}")
@@ -66,6 +73,9 @@ def _iface(value):
 
 CFG = dict(
     opal_host=os.getenv("OPAL_HOST", ""),  # empty = Opal/OpenWrt disabled (primary router only)
+    # How to read the Opal: "http" = netstatus JSON, "ssh" = commands over SSH, "auto" = HTTP, SSH as fallback.
+    opal_source=_choice("OPAL_SOURCE", "auto", ("auto", "http", "ssh")),
+    opal_url=os.getenv("OPAL_URL", ""),  # empty = http://<OPAL_HOST>/netstatus.json (filled in below)
     opal_port=int(os.getenv("OPAL_PORT", "22")),
     opal_user=os.getenv("OPAL_USER", "root"),
     opal_pass=os.getenv("OPAL_PASSWORD", os.getenv("OPAL_PASS", "")) or None,
@@ -107,6 +117,10 @@ CFG = dict(
     kuma_alexa_port=int(os.getenv("KUMA_ALEXA_PORT", "1080")),
     kuma_shelly_expected=os.getenv("KUMA_SHELLY_EXPECTED", "-70"),
 )
+
+if CFG["opal_host"] and not CFG["opal_url"]:
+    _host = CFG["opal_host"]
+    CFG["opal_url"] = f"http://{f'[{_host}]' if ':' in _host else _host}/netstatus.json"
 
 GROUP = {"WIRED": "wired", "HOST_5G": "w5", "HOST_6G": "w5", "HOST_2G": "w2",
          "IOT_2G": "iot", "IOT_5G": "iot", "IOT_6G": "iot",

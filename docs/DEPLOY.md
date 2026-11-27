@@ -157,6 +157,8 @@ Netmap does not do TLS. With Nginx Proxy Manager: *Add Proxy Host* → domain, *
 | `Home Assistant · AX55: ERROR · … 401` | Wrong or expired token |
 | `… ConnectionError` / `Max retries` towards Home Assistant | Wrong `HA_URL`, or the host cannot reach port 8123 |
 | `Set HA_URL and HA_TOKEN in the .env file…` | `.env` not read: check its path and permissions (`EnvironmentFile`, `env_file`) |
+| `Opal …: ERROR · … netstatus: data is N s old` / `unsupported schema` / `collection failed` | The netstatus service on the AP is stopped, its clock is wrong, or it is an old version: check `http://<OPAL>/status/`. With `OPAL_SOURCE=auto` Netmap falls back to SSH meanwhile |
+| `… · HTTP unavailable: …` in the Opal detail | `auto` mode is using SSH because the netstatus endpoint failed; HTTP is retried every 5 minutes |
 | `Opal (SSH): ERROR · AuthenticationException` | Key not installed on Dropbear, or wrong password |
 | `Incompatible ssh peer (no acceptable host key)` | paramiko 5 does not support the `ssh-rsa` (SHA-1) host key of an older Dropbear. Install `paramiko>=3.4,<5` (already pinned in `requirements.txt`), or give the AP an ed25519 host key: `dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key && /etc/init.d/dropbear restart` |
 | `… not found in known_hosts` | With `OPAL_KNOWN_HOSTS` the AP's host key is not in the file |

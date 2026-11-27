@@ -1,0 +1,160 @@
+##AP
+wlan0     ESSID: "Home-IoT"
+          Access Point: 02:00:00:00:00:06
+          Mode: Master  Channel: 1 (2.412 GHz) HT Mode: HT20
+          Tx-Power: 10 dBm  Link Quality: 62/70
+          Signal: -57 dBm  Noise: -67 dBm
+          Bit Rate: unknown
+          Encryption: WPA2 PSK (CCMP)
+          Type: nl80211  HW Mode(s): 802.11bgn
+##ASSOC
+02:00:00:00:00:08  -55 dBm / -86 dBm (SNR 31)  9000 ms ago
+	RX: 57.8 MBit/s, MCS 5, 20MHz
+	TX: unknown
+
+02:00:00:00:00:09  -40 dBm / -86 dBm (SNR 46)  2000 ms ago
+	RX: 54.0 MBit/s
+	TX: 7.2 MBit/s, VHT-MCS 0, 20MHz, VHT-NSS 1
+##HOSTAPD
+{
+	"freq": 2412,
+	"clients": {
+		"02:00:00:00:00:08": {
+			"assoc": true,
+			"authorized": true,
+			"aid": 1,
+			"wmm": true,
+			"ht": true,
+			"vht": false,
+			"auth": true
+		},
+		"02:00:00:00:00:09": {
+			"assoc": true,
+			"authorized": true,
+			"aid": 2,
+			"wmm": false,
+			"ht": false,
+			"vht": false,
+			"auth": true
+		},
+		"02:00:00:00:0f:02": {
+			"assoc": true,
+			"authorized": true,
+			"aid": 3,
+			"wmm": true,
+			"ht": true,
+			"vht": false,
+			"auth": true
+		}
+	}
+}
+##STA
+wlan-sta0 ESSID: "Home"
+          Access Point: 02:00:00:00:00:05
+          Mode: Client  Channel: 36 (5.180 GHz) HT Mode: VHT80
+          Tx-Power: 0 dBm  Link Quality: 51/70
+          Signal: -59 dBm  Noise: unknown
+          Bit Rate: unknown
+          Encryption: WPA2 PSK (CCMP)
+          Type: nl80211  HW Mode(s): 802.11nac
+##MAC
+02:00:00:00:00:05
+##NEIGH
+192.0.2.150 dev br-lan lladdr 02:00:00:00:0f:01 REACHABLE
+192.0.2.243 dev wlan-sta0 lladdr 02:00:00:00:00:39 REACHABLE
+192.0.2.240 dev wlan-sta0 lladdr 02:00:00:00:00:38 REACHABLE
+192.0.2.238 dev wlan-sta0 lladdr 02:00:00:00:00:37 STALE
+192.0.2.232 dev wlan-sta0 lladdr 02:00:00:00:00:36 STALE
+192.0.2.228 dev wlan-sta0 lladdr 02:00:00:00:00:35 REACHABLE
+192.0.2.227 dev wlan-sta0 lladdr 02:00:00:00:00:34 REACHABLE
+192.0.2.224 dev wlan-sta0 lladdr 02:00:00:00:00:33 REACHABLE
+192.0.2.221 dev wlan-sta0 lladdr 02:00:00:00:00:32 REACHABLE
+192.0.2.217 dev wlan-sta0 lladdr 02:00:00:00:00:31 REACHABLE
+192.0.2.213 dev wlan-sta0 lladdr 02:00:00:00:00:30 REACHABLE
+192.0.2.197 dev wlan-sta0 lladdr 02:00:00:00:00:2f REACHABLE
+192.0.2.194 dev wlan-sta0 lladdr 02:00:00:00:00:2e REACHABLE
+192.0.2.193 dev wlan-sta0 lladdr 02:00:00:00:00:2d REACHABLE
+192.0.2.191 dev wlan-sta0 lladdr 02:00:00:00:00:2c REACHABLE
+192.0.2.158 dev wlan-sta0 lladdr 02:00:00:00:00:2b REACHABLE
+192.0.2.155 dev wlan-sta0 lladdr 02:00:00:00:00:2a REACHABLE
+192.0.2.134 dev wlan-sta0 lladdr 02:00:00:00:00:29 REACHABLE
+192.0.2.132 dev wlan-sta0 lladdr 02:00:00:00:00:28 STALE
+192.0.2.131 dev wlan-sta0 lladdr 02:00:00:00:00:27 REACHABLE
+192.0.2.127 dev wlan-sta0 lladdr 02:00:00:00:00:26 REACHABLE
+192.0.2.124 dev wlan-sta0 lladdr 02:00:00:00:00:25 STALE
+192.0.2.122 dev wlan-sta0 lladdr 02:00:00:00:00:24 REACHABLE
+192.0.2.121 dev wlan-sta0 lladdr 02:00:00:00:00:23 STALE
+192.0.2.117 dev wlan-sta0 lladdr 02:00:00:00:00:22 REACHABLE
+192.0.2.115 dev wlan-sta0 lladdr 02:00:00:00:00:21 STALE
+192.0.2.116 dev wlan-sta0 lladdr 02:00:00:00:00:20 STALE
+192.0.2.114 dev wlan-sta0 lladdr 02:00:00:00:00:20 STALE
+192.0.2.105 dev wlan-sta0 lladdr 02:00:00:00:00:1f STALE
+192.0.2.172 dev wlan-sta0 lladdr 02:00:00:00:00:1e STALE
+192.0.2.103 dev wlan-sta0 lladdr 02:00:00:00:00:1e STALE
+192.0.2.91 dev wlan-sta0 lladdr 02:00:00:00:00:1d REACHABLE
+192.0.2.90 dev wlan-sta0 lladdr 02:00:00:00:00:1c REACHABLE
+192.0.2.88 dev wlan-sta0 lladdr 02:00:00:00:00:1b REACHABLE
+192.0.2.87 dev wlan-sta0 lladdr 02:00:00:00:00:1a REACHABLE
+192.0.2.83 dev wlan-sta0 lladdr 02:00:00:00:00:19 REACHABLE
+192.0.2.80 dev wlan-sta0 lladdr 02:00:00:00:00:18 REACHABLE
+192.0.2.79 dev wlan-sta0 lladdr 02:00:00:00:00:17 REACHABLE
+192.0.2.73 dev wlan-sta0 lladdr 02:00:00:00:00:16 REACHABLE
+192.0.2.63 dev wlan-sta0 lladdr 02:00:00:00:00:15 STALE
+192.0.2.62 dev wlan-sta0 lladdr 02:00:00:00:00:14 REACHABLE
+192.0.2.59 dev wlan-sta0 lladdr 02:00:00:00:00:13 REACHABLE
+192.0.2.52 dev wlan-sta0 lladdr 02:00:00:00:00:12 STALE
+192.0.2.51 dev wlan-sta0 lladdr 02:00:00:00:00:12 STALE
+192.0.2.44 dev wlan-sta0 lladdr 02:00:00:00:00:11 REACHABLE
+192.0.2.43 dev wlan-sta0 lladdr 02:00:00:00:00:10 REACHABLE
+192.0.2.18 dev wlan-sta0 lladdr 02:00:00:00:00:0f STALE
+192.0.2.12 dev wlan-sta0 lladdr 02:00:00:00:00:0e STALE
+192.0.2.7 dev wlan-sta0 lladdr 02:00:00:00:00:0d REACHABLE
+192.0.2.3 dev wlan-sta0 lladdr 02:00:00:00:00:0c REACHABLE
+192.0.2.1 dev wlan-sta0 lladdr 02:00:00:00:00:0b REACHABLE
+192.0.2.89 dev wlan-sta0 lladdr 02:00:00:00:00:0a STALE
+169.254.44.81 dev wlan-sta0 lladdr 02:00:00:00:00:0a STALE
+192.0.2.45 dev br-lan lladdr 02:00:00:00:00:09 REACHABLE
+192.0.2.244 dev br-lan lladdr 02:00:00:00:00:08 REACHABLE
+192.0.2.167 dev wlan-sta0 lladdr 02:00:00:00:00:05 STALE
+192.0.2.83 dev br-lan  FAILED
+192.0.2.62 dev br-lan  FAILED
+192.0.2.3 dev br-lan  FAILED
+192.0.2.239 dev br-lan  FAILED
+192.0.2.224 dev br-lan  FAILED
+192.0.2.221 dev br-lan  FAILED
+192.0.2.167 dev br-lan  FAILED
+192.0.2.166 dev br-lan  FAILED
+192.0.2.1 dev br-lan  FAILED
+
+##ADDR
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536
+    inet 127.0.0.1/8 scope host lo
+9: br-lan: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500
+    inet 192.0.2.2/24 scope global br-lan
+10: wlan-sta0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500
+    inet 192.0.2.242/24 scope global wlan-sta0
+
+##LOCAL
+00:00:00:00:00:00
+02:00:00:00:00:03
+02:00:00:00:00:06
+02:00:00:00:00:01
+02:00:00:00:00:05
+02:00:00:00:00:04
+02:00:00:00:00:02
+02:00:00:00:00:01
+##FDB
+33:33:00:00:00:01 dev br-lan self permanent
+02:00:00:00:00:01 dev eth0.1 master br-lan permanent
+33:33:00:00:00:01 dev eth0.1 self permanent
+02:00:00:00:00:08 dev wlan0 master br-lan 
+33:33:00:00:00:01 dev wlan0 self permanent
+02:00:00:00:00:06 dev wlan0 master br-lan permanent
+33:33:00:00:00:01 dev wlan0 self permanent
+02:00:00:00:00:09 dev wlan0 master br-lan 
+33:33:00:00:00:01 dev wlan0 self permanent
+02:00:00:00:0f:01 dev eth0.1 master br-lan 
+33:33:00:00:00:01 dev eth0.1 self permanent
+##PORTS
+0x1 eth0.1
+0x2 wlan0

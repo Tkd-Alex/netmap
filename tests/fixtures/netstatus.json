@@ -1,0 +1,797 @@
+{
+ "ap": {
+  "bssid": "02:00:00:00:00:06",
+  "channel": 1,
+  "clients": [
+   {
+    "aid": 1,
+    "assoc": true,
+    "authorized": true,
+    "ht": true,
+    "in_assoclist": true,
+    "in_hostapd": true,
+    "inactive_ms": 9000,
+    "ip": "192.0.2.244",
+    "mac": "02:00:00:00:00:08",
+    "noise_dbm": -86,
+    "rx": {
+     "mcs": 5,
+     "packets": 2904,
+     "rate_mbps": 57.8,
+     "short_gi": false,
+     "width_mhz": 20
+    },
+    "signal_dbm": -55,
+    "snr_db": 31,
+    "tx": {
+     "packets": 1057,
+     "short_gi": false
+    },
+    "vht": false,
+    "wmm": true
+   },
+   {
+    "aid": 2,
+    "assoc": true,
+    "authorized": true,
+    "ht": false,
+    "in_assoclist": true,
+    "in_hostapd": true,
+    "inactive_ms": 2000,
+    "ip": "192.0.2.45",
+    "mac": "02:00:00:00:00:09",
+    "noise_dbm": -86,
+    "rx": {
+     "packets": 1411,
+     "rate_mbps": 54,
+     "short_gi": false
+    },
+    "signal_dbm": -40,
+    "snr_db": 46,
+    "tx": {
+     "packets": 723,
+     "rate_mbps": 7.2,
+     "short_gi": false,
+     "vht_mcs": 0,
+     "vht_nss": 1,
+     "width_mhz": 20
+    },
+    "vht": false,
+    "wmm": false
+   },
+   {
+    "aid": 3,
+    "assoc": true,
+    "authorized": true,
+    "ht": true,
+    "in_assoclist": false,
+    "in_hostapd": true,
+    "inactive_ms": null,
+    "ip": null,
+    "mac": "02:00:00:00:0f:02",
+    "noise_dbm": null,
+    "rx": null,
+    "signal_dbm": null,
+    "snr_db": null,
+    "tx": null,
+    "vht": false,
+    "wmm": true
+   }
+  ],
+  "dtim_period": 1,
+  "encryption": "WPA2 PSK (CCMP)",
+  "freq_mhz": 2412,
+  "hostapd_ok": true,
+  "htmode": "HT20",
+  "hw_modes": "802.11bgn",
+  "ifname": "wlan0",
+  "noise_dbm": -67,
+  "ssid": "Home-IoT",
+  "txpower_dbm": 10
+ },
+ "checks": [
+  {
+   "actual": "1",
+   "expected": "1",
+   "id": "gl_repeater_off",
+   "label": "GL repeater manager disabled",
+   "level": "critical",
+   "ok": true,
+   "ref": "docs/02-plan-b.md"
+  },
+  {
+   "actual": "idle",
+   "expected": "idle",
+   "id": "gl_repeater_idle",
+   "label": "GL repeater manager idle",
+   "level": "critical",
+   "ok": true,
+   "ref": "docs/02-plan-b.md"
+  },
+  {
+   "actual": "radio1",
+   "expected": "radio1",
+   "id": "sta_radio",
+   "label": "Uplink client on the 5 GHz radio",
+   "level": "critical",
+   "ok": true,
+   "ref": "docs/02-plan-b.md"
+  },
+  {
+   "actual": "02:00:00:00:00:3a",
+   "expected": "set",
+   "id": "sta_bssid_pinned",
+   "label": "Uplink pinned to a BSSID",
+   "level": "critical",
+   "ok": true,
+   "ref": "docs/02-plan-b.md"
+  },
+  {
+   "actual": "COMPLETED",
+   "expected": "COMPLETED",
+   "id": "uplink_connected",
+   "label": "Uplink connected",
+   "level": "critical",
+   "ok": true,
+   "ref": "docs/05-operations.md"
+  },
+  {
+   "actual": "02:00:00:00:00:07",
+   "expected": "02:00:00:00:00:07",
+   "id": "uplink_bssid",
+   "label": "Connected to the pinned BSSID",
+   "level": "critical",
+   "ok": true,
+   "ref": "docs/02-plan-b.md"
+  },
+  {
+   "actual": "ch 36 VHT80",
+   "expected": "ch 36 40 44 48",
+   "id": "uplink_5ghz",
+   "label": "Uplink on 5 GHz, non-DFS channel",
+   "level": "critical",
+   "ok": true,
+   "ref": "README.md"
+  },
+  {
+   "actual": "N",
+   "expected": "N",
+   "id": "ps_on",
+   "label": "5 GHz driver power save off (ps_on)",
+   "level": "critical",
+   "ok": true,
+   "ref": "docs/03-power-save.md"
+  },
+  {
+   "actual": true,
+   "expected": true,
+   "id": "psoff_enabled",
+   "label": "psoff init script enabled",
+   "level": "critical",
+   "ok": true,
+   "ref": "docs/03-power-save.md"
+  },
+  {
+   "actual": false,
+   "expected": false,
+   "id": "rf_misc_stock",
+   "label": "preinit 99_rf_misc untouched (stock)",
+   "level": "warning",
+   "ok": true,
+   "ref": "docs/03-power-save.md"
+  },
+  {
+   "actual": "1",
+   "expected": "1",
+   "id": "dtim_config",
+   "label": "IoT AP DTIM (config)",
+   "level": "critical",
+   "ok": true,
+   "ref": "docs/04-dtim.md"
+  },
+  {
+   "actual": "1",
+   "expected": "1",
+   "id": "dtim_running",
+   "label": "IoT AP DTIM (running hostapd)",
+   "level": "critical",
+   "ok": true,
+   "ref": "docs/04-dtim.md"
+  },
+  {
+   "actual": 10,
+   "expected": 10,
+   "id": "ap_txpower",
+   "label": "IoT AP tx power (dBm)",
+   "level": "warning",
+   "ok": true,
+   "ref": "README.md"
+  },
+  {
+   "actual": true,
+   "expected": true,
+   "id": "relayd",
+   "label": "relayd running",
+   "level": "critical",
+   "ok": true,
+   "ref": "README.md"
+  },
+  {
+   "actual": 3.368,
+   "expected": "< 20",
+   "id": "uplink_latency",
+   "label": "Gateway latency (avg ms)",
+   "level": "warning",
+   "ok": true,
+   "ref": "docs/03-power-save.md"
+  }
+ ],
+ "driver_5g": {
+  "listen_itv": 5,
+  "module": "sf16a18_hb_fmac",
+  "ps_on": "N"
+ },
+ "duration_s": 7.22,
+ "failed": [],
+ "generator": "netstatus 2.0",
+ "interval": 30,
+ "lan": {
+  "addresses": [
+   {
+    "address": "192.0.2.2",
+    "ifname": "br-lan",
+    "prefix": 24
+   },
+   {
+    "address": "192.0.2.242",
+    "ifname": "wlan-sta0",
+    "prefix": 24
+   }
+  ],
+  "bridge": "br-lan",
+  "bridge_fdb": [
+   {
+    "ifname": "eth0.1",
+    "local": true,
+    "mac": "02:00:00:00:00:01"
+   },
+   {
+    "ifname": "wlan0",
+    "local": false,
+    "mac": "02:00:00:00:00:08"
+   },
+   {
+    "ifname": "wlan0",
+    "local": true,
+    "mac": "02:00:00:00:00:06"
+   },
+   {
+    "ifname": "wlan0",
+    "local": false,
+    "mac": "02:00:00:00:00:09"
+   },
+   {
+    "ifname": "eth0.1",
+    "local": false,
+    "mac": "02:00:00:00:0f:01"
+   }
+  ],
+  "bridge_ports": [
+   {
+    "ifname": "eth0.1",
+    "port_no": 1
+   },
+   {
+    "ifname": "wlan0",
+    "port_no": 2
+   }
+  ],
+  "interfaces": {
+   "br-lan": "02:00:00:00:00:01",
+   "eth0": "02:00:00:00:00:02",
+   "eth0.1": "02:00:00:00:00:01",
+   "ifb0": "02:00:00:00:00:03",
+   "ifb1": "02:00:00:00:00:04",
+   "wlan-sta0": "02:00:00:00:00:05",
+   "wlan0": "02:00:00:00:00:06"
+  },
+  "neighbors": [
+   {
+    "dev": "wlan-sta0",
+    "ip": "169.254.44.81",
+    "mac": "02:00:00:00:00:0a",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.1",
+    "mac": "02:00:00:00:00:0b",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "br-lan",
+    "ip": "192.0.2.1",
+    "mac": null,
+    "router": false,
+    "state": "FAILED"
+   },
+   {
+    "dev": "br-lan",
+    "ip": "192.0.2.3",
+    "mac": null,
+    "router": false,
+    "state": "FAILED"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.3",
+    "mac": "02:00:00:00:00:0c",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.7",
+    "mac": "02:00:00:00:00:0d",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.12",
+    "mac": "02:00:00:00:00:0e",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.18",
+    "mac": "02:00:00:00:00:0f",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.43",
+    "mac": "02:00:00:00:00:10",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.44",
+    "mac": "02:00:00:00:00:11",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "br-lan",
+    "ip": "192.0.2.45",
+    "mac": "02:00:00:00:00:09",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.51",
+    "mac": "02:00:00:00:00:12",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.52",
+    "mac": "02:00:00:00:00:12",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.59",
+    "mac": "02:00:00:00:00:13",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.62",
+    "mac": "02:00:00:00:00:14",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "br-lan",
+    "ip": "192.0.2.62",
+    "mac": null,
+    "router": false,
+    "state": "FAILED"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.63",
+    "mac": "02:00:00:00:00:15",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.73",
+    "mac": "02:00:00:00:00:16",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.79",
+    "mac": "02:00:00:00:00:17",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.80",
+    "mac": "02:00:00:00:00:18",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "br-lan",
+    "ip": "192.0.2.83",
+    "mac": null,
+    "router": false,
+    "state": "FAILED"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.83",
+    "mac": "02:00:00:00:00:19",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.87",
+    "mac": "02:00:00:00:00:1a",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.88",
+    "mac": "02:00:00:00:00:1b",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.89",
+    "mac": "02:00:00:00:00:0a",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.90",
+    "mac": "02:00:00:00:00:1c",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.91",
+    "mac": "02:00:00:00:00:1d",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.103",
+    "mac": "02:00:00:00:00:1e",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.105",
+    "mac": "02:00:00:00:00:1f",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.114",
+    "mac": "02:00:00:00:00:20",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.115",
+    "mac": "02:00:00:00:00:21",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.116",
+    "mac": "02:00:00:00:00:20",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.117",
+    "mac": "02:00:00:00:00:22",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.121",
+    "mac": "02:00:00:00:00:23",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.122",
+    "mac": "02:00:00:00:00:24",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.124",
+    "mac": "02:00:00:00:00:25",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.127",
+    "mac": "02:00:00:00:00:26",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.131",
+    "mac": "02:00:00:00:00:27",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.132",
+    "mac": "02:00:00:00:00:28",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.134",
+    "mac": "02:00:00:00:00:29",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "br-lan",
+    "ip": "192.0.2.150",
+    "mac": "02:00:00:00:0f:01",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.155",
+    "mac": "02:00:00:00:00:2a",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.158",
+    "mac": "02:00:00:00:00:2b",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "br-lan",
+    "ip": "192.0.2.166",
+    "mac": null,
+    "router": false,
+    "state": "FAILED"
+   },
+   {
+    "dev": "br-lan",
+    "ip": "192.0.2.167",
+    "mac": null,
+    "router": false,
+    "state": "FAILED"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.167",
+    "mac": "02:00:00:00:00:05",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.172",
+    "mac": "02:00:00:00:00:1e",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.191",
+    "mac": "02:00:00:00:00:2c",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.193",
+    "mac": "02:00:00:00:00:2d",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.194",
+    "mac": "02:00:00:00:00:2e",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.197",
+    "mac": "02:00:00:00:00:2f",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.213",
+    "mac": "02:00:00:00:00:30",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.217",
+    "mac": "02:00:00:00:00:31",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "br-lan",
+    "ip": "192.0.2.221",
+    "mac": null,
+    "router": false,
+    "state": "FAILED"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.221",
+    "mac": "02:00:00:00:00:32",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.224",
+    "mac": "02:00:00:00:00:33",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "br-lan",
+    "ip": "192.0.2.224",
+    "mac": null,
+    "router": false,
+    "state": "FAILED"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.227",
+    "mac": "02:00:00:00:00:34",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.228",
+    "mac": "02:00:00:00:00:35",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.232",
+    "mac": "02:00:00:00:00:36",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.238",
+    "mac": "02:00:00:00:00:37",
+    "router": false,
+    "state": "STALE"
+   },
+   {
+    "dev": "br-lan",
+    "ip": "192.0.2.239",
+    "mac": null,
+    "router": false,
+    "state": "FAILED"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.240",
+    "mac": "02:00:00:00:00:38",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "wlan-sta0",
+    "ip": "192.0.2.243",
+    "mac": "02:00:00:00:00:39",
+    "router": false,
+    "state": "REACHABLE"
+   },
+   {
+    "dev": "br-lan",
+    "ip": "192.0.2.244",
+    "mac": "02:00:00:00:00:08",
+    "router": false,
+    "state": "REACHABLE"
+   }
+  ]
+ },
+ "ok": true,
+ "schema": 2,
+ "system": {
+  "firmware": "4.3.28",
+  "hostname": "opal",
+  "loadavg": [
+   1.93,
+   1.96,
+   1.91
+  ],
+  "openwrt": "OpenWrt  18.06",
+  "uptime_s": 100000
+ },
+ "time": 1795788000,
+ "time_iso": "2026-11-27T13:20:00Z",
+ "uplink": {
+  "bssid": "02:00:00:00:00:07",
+  "bssid_pinned": "02:00:00:00:00:07",
+  "channel": 36,
+  "encryption": "WPA2 PSK (CCMP)",
+  "freq_mhz": 5180,
+  "gateway": "192.0.2.1",
+  "htmode": "VHT80",
+  "ifname": "wlan-sta0",
+  "ip": "192.0.2.242",
+  "mac": "02:00:00:00:00:05",
+  "noise_dbm": null,
+  "ping": {
+   "avg_ms": 3.368,
+   "host": "192.0.2.1",
+   "max_ms": 3.632,
+   "min_ms": 3.108,
+   "received": 3,
+   "sent": 3
+  },
+  "quality": "51/70",
+  "radio": "radio1",
+  "signal_dbm": -59,
+  "ssid": "Home",
+  "state": "COMPLETED"
+ }
+}
