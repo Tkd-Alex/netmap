@@ -3,3 +3,6 @@ requests>=2.31
 # paramiko 5 removed the SHA-1 "ssh-rsa" host key, which older Dropbear servers (e.g. GL.iNet/OpenWrt) still use
 paramiko>=3.4,<5
 waitress>=3.0
+# Uptime Kuma sync (Socket.IO client, websocket transport); only used when KUMA_URL is set
+python-socketio[client]>=5.11
+websocket-client>=1.8

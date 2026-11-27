@@ -5,7 +5,8 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from config import BAND, CFG, GROUP, L, LABEL, log, msg, norm_mac, setup_logging, suggest_kind, TYPES
+import kuma
+from config import BAND, CFG, GROUP, KUMA_CHECKS, L, LABEL, log, msg, norm_mac, setup_logging, suggest_check, suggest_kind, TYPES
 from sources import fetch_home_assistant, fetch_opal
 from database import CONFIG_ERRORS, dbx, HEALTH, init_db, prune, read_meta, read_names, save_history, track_seen
 
@@ -34,6 +35,17 @@ def node_of(d):
         if hint.lower() in name:
             return hint
     return "AX55"
+
+
+def kuma_settings(info, item, source):
+    """Uptime Kuma opt-in and check type: explicit choice in meta.json, otherwise the automatic default."""
+    stored = info.get("kuma") if isinstance(info.get("kuma"), dict) else {}
+    auto_check = suggest_check(item["name"], source)
+    check = stored.get("check") if stored.get("check") in KUMA_CHECKS else None
+    auto_enabled = item["kind"] in CFG["kuma_default_types"] or auto_check != "ping"
+    enabled = stored.get("enabled") if isinstance(stored.get("enabled"), bool) else None
+    return dict(enabled=auto_enabled if enabled is None else enabled, enabled_set=enabled,
+                check=check or auto_check, check_set=check, check_auto=auto_check)
 
 
 def opal_ip(opal, mac, router_ip):
@@ -139,6 +151,7 @@ def build(router, opal, names, meta=None, previous=None, now=None, allow_opal_gr
         suggested = None if explicit else suggest_kind(mac, item["name"], source)
         item["kind"], item["kind_auto"] = explicit or suggested, bool(suggested)
         item["room"] = str(info.get("room") or "")
+        item["kuma"] = kuma_settings(info, item, source)
 
     devices = sorted(table.values(), key=lambda d: (not d["connected"], d["ap"], d["name"].lower()))
     live = [d for d in devices if d["connected"]]
@@ -252,6 +265,8 @@ def detect_events(prev, data, now):
             events.append((now, mac, d["name"], "move_ap", _where(old), _where(d)))
         elif old["group"] != d["group"]:
             events.append((now, mac, d["name"], "move_band", _where(old), _where(d)))
+        if old and old.get("ip") and d.get("ip") and old["ip"] != d["ip"]:
+            events.append((now, mac, d["name"], "ip", old["ip"], d["ip"]))
     for mac, old in before.items():
         if mac not in after:
             events.append((now, mac, old["name"], "disconnect", _where(old), None))
@@ -277,6 +292,8 @@ def log_changes(prev, data, events):
         log.info(L("Dispositivi · connessi: %s · disconnessi: %s", "Devices · connected: %s · disconnected: %s"),
                  fmt(joined) or "—", fmt(left) or "—")
     for e in events:
+        if e[3] == "ip":
+            log.info(L("Cambio IP: %s da %s a %s", "IP change: %s from %s to %s"), e[2] or e[1], e[4], e[5])
         if e[3] in ("move_ap", "move_band"):
             log.info(L("%s: %s da «%s» a «%s»", "%s: %s from «%s» to «%s»"),
                      L("Cambio AP", "AP change") if e[3] == "move_ap" else L("Cambio banda/rete", "Band/network change"),
@@ -344,6 +361,7 @@ def collect():
     if "database" not in errors:
         db.update(ok=True, last_ok=now, fails=0, last_error=None)
     log_changes(STATE["data"], data, events)
+    kuma.annotate(data)  # last known Uptime Kuma status per device (no network calls here)
     live = sum(d["connected"] for d in data["devices"])
     with COND:
         META["seq"] += 1
@@ -354,6 +372,14 @@ def collect():
                "Cycle %d · %s · %s · %d/%d connected · +%d samples · %.2f s total"), META["seq"],
              _source_summary("router", "HA"), _source_summary("opal", "Opal"), live, len(data["devices"]),
              saved, time.perf_counter() - started)
+
+
+def kuma_sync():
+    """Push the cycle's devices to Uptime Kuma. Kuma problems never stop polling: they only show in HEALTH."""
+    try:
+        kuma.sync(STATE["data"])
+    except Exception:
+        log.exception(L("Errore imprevisto nella sincronizzazione Uptime Kuma", "Unexpected error in the Uptime Kuma sync"))
 
 
 def poll_loop():
@@ -368,6 +394,7 @@ def poll_loop():
         cycle_start = time.monotonic()
         try:
             collect()
+            kuma_sync()
             if time.time() - last_prune > 3600:
                 prune()
                 last_prune = time.time()
@@ -392,4 +419,5 @@ def start_worker():
                    "Start · every %d s · HA %s · %s · DB %s (%d d) · auth %s · log %s"), CFG["poll"],
                  CFG["ha_url"] or L("NON CONFIGURATO", "NOT CONFIGURED"), opal, CFG["db"], CFG["retention_days"],
                  L("attiva", "on") if CFG["auth_user"] else L("disattiva", "off"), logging.getLevelName(log.level))
+        log.info("Uptime Kuma · %s", f"{CFG['kuma_user']}@{CFG['kuma_url']}" if CFG["kuma_url"] else L("disattivato", "disabled"))
         threading.Thread(target=poll_loop, daemon=True, name="network-poller").start()

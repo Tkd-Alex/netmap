@@ -98,6 +98,14 @@ CFG = dict(
     ha_verify=os.getenv("HA_VERIFY_SSL", "true").lower() not in ("0", "false", "no", "off"),
     auth_user=os.getenv("DASH_USER", ""),
     auth_pass=os.getenv("DASH_PASSWORD", ""),
+    # Uptime Kuma (optional): one monitor per opted-in device, keyed by MAC. Empty URL = disabled.
+    kuma_url=os.getenv("KUMA_URL", "").rstrip("/"),
+    kuma_user=os.getenv("KUMA_USERNAME", ""),
+    kuma_pass=os.getenv("KUMA_PASSWORD", ""),
+    kuma_default_types=_list("KUMA_DEFAULT_TYPES", "camera,rete,luce_presa"),
+    kuma_interval=max(20, int(os.getenv("KUMA_INTERVAL", "60"))),
+    kuma_alexa_port=int(os.getenv("KUMA_ALEXA_PORT", "1080")),
+    kuma_shelly_expected=os.getenv("KUMA_SHELLY_EXPECTED", "-70"),
 )
 
 GROUP = {"WIRED": "wired", "HOST_5G": "w5", "HOST_6G": "w5", "HOST_2G": "w2",
@@ -128,16 +136,29 @@ KIND_HINTS = [  # in priority order; words <4 chars only if an exact "chunk" of 
 ]
 
 
-def suggest_kind(mac, *texts):
-    """Likely type from MAC (known OUI) or from words in the name. Only a suggestion: the last word is yours."""
-    if mac[:8] in OUI_KIND:
-        return OUI_KIND[mac[:8]]
+def _hint(hints, texts):
     tokens = re.findall(r"[a-z0-9]+", " ".join(t for t in texts if t).lower())
-    for kind, words in KIND_HINTS:
+    for kind, words in hints:
         for word in words.split():
             if any(t == word if len(word) < 4 else t.startswith(word) for t in tokens):
                 return kind
     return None
+
+
+def suggest_kind(mac, *texts):
+    """Likely type from MAC (known OUI) or from words in the name. Only a suggestion: the last word is yours."""
+    if mac[:8] in OUI_KIND:
+        return OUI_KIND[mac[:8]]
+    return _hint(KIND_HINTS, texts)
+
+
+KUMA_CHECKS = ("ping", "alexa", "shelly")  # ping · TCP port (Alexa/Echo) · Shelly RPC JSON query on wifi.rssi
+KUMA_HINTS = [("shelly", "shelly"), ("alexa", "echo alexa amazon")]
+
+
+def suggest_check(*texts):
+    """Uptime Kuma check type from the device name/hostname; ping when nothing more specific matches."""
+    return _hint(KUMA_HINTS, texts) or "ping"
 
 
 UPLINK_ID = "opal:uplink"  # pseudo-MAC by which the uplink signal is historicized

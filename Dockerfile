@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends tzdata \
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install -r requirements.txt
-COPY app.py config.py sources.py database.py builder.py ./
+COPY app.py config.py sources.py database.py builder.py kuma.py ./
 COPY templates ./templates
 COPY static ./static
 COPY deploy/healthcheck.py ./healthcheck.py

@@ -12,7 +12,8 @@ from config import CFG, L, log, LOG_LANG, msg, norm_mac, TYPES, UPLINK_ID
 # Health status of each source, shown in the "Diagnostics" panel and at /api/health.
 HEALTH = {key: dict(label=label, ok=None, last_ok=None, last_try=None, duration=None, fails=0,
                     last_error=None, detail="")
-          for key, label in (("router", "Home Assistant · AX55"), ("opal", "Opal (SSH)"), ("db", "Database"))}
+          for key, label in (("router", "Home Assistant · AX55"), ("opal", "Opal (SSH)"), ("db", "Database"),
+                                         ("kuma", "Uptime Kuma"))}
 OFFLINE_ALERTED = set()
 
 

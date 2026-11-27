@@ -13,7 +13,7 @@ import time
 from flask import Flask, Response, jsonify, render_template, request
 
 import builder  # builder.STATE is rebound at every cycle: always read it through the module
-from config import CFG, norm_mac, ROOT, TYPES, UPLINK_ID
+from config import CFG, KUMA_CHECKS, norm_mac, ROOT, TYPES, UPLINK_ID
 from database import dbx, read_meta, read_names, write_meta, write_names
 from builder import COND, META, start_worker, WAKE
 
@@ -165,12 +165,20 @@ def api_meta(mac):
     room = " ".join(str(body.get("room") or "").split())[:40]
     if kind and kind not in TYPES:
         return jsonify(error="Invalid type"), 400
+    kuma = body.get("kuma")
+    if kuma is not None:  # {"enabled": true|false|null, "check": "ping"|"alexa"|"shelly"|""}; null/"" = automatic
+        if not isinstance(kuma, dict) or kuma.get("enabled") not in (True, False, None) \
+                or (kuma.get("check") or "") not in ("", *KUMA_CHECKS):
+            return jsonify(error="Invalid kuma settings"), 400
+        kuma = {k: v for k, v in (("enabled", kuma.get("enabled")), ("check", kuma.get("check") or None)) if v is not None}
     with META_LOCK:
         try:
             meta = read_meta(strict=True)
         except (OSError, ValueError) as exc:
             return jsonify(error=f"meta.json unreadable: {exc}"), 500
-        entry = {k: v for k, v in (("type", kind), ("room", room)) if v}
+        if kuma is None:  # field not sent: keep what is stored
+            kuma = (meta.get(mac) or {}).get("kuma") if isinstance(meta.get(mac), dict) else None
+        entry = {k: v for k, v in (("type", kind), ("room", room), ("kuma", kuma)) if v}
         if entry:
             meta[mac] = entry
         else:
