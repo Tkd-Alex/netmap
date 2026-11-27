@@ -306,3 +306,20 @@ def test_empty_router_answer_keeps_last_data_and_marks_cycle_unclean(A, cycle, m
     assert data["clean"] is False and "router" in data["stale"]        # downstream (e.g. Kuma) is skipped
     assert any(d["mac"] == phone and d["connected"] for d in data["devices"])  # no false "gone"
     assert database.HEALTH["router"]["ok"] is False
+
+
+def test_parse_opal_reads_hostapd_clients_object(A):
+    # `ubus call hostapd.<if> get_clients` wraps the clients: {"freq": 2412, "clients": {mac: {…}}}
+    hostapd = json.dumps({"freq": 2412, "clients": {
+        "aa:bb:cc:00:00:03": {"auth": True, "assoc": True, "authorized": True},
+        "aa:bb:cc:00:00:05": {"auth": True, "assoc": True, "authorized": False}}})
+    parsed = sources.parse_opal(OPAL_OUTPUT.replace("##STA\n", f"##HOSTAPD\n{hostapd}\n##STA\n"))
+    assert parsed["hostapd_ok"] is True and list(parsed["hostapd_clients"]) == ["aa:bb:cc:00:00:03"]
+
+
+def test_parse_opal_arp_tie_does_not_depend_on_order(A):
+    lines = ["192.168.1.81 dev br-lan lladdr aa:bb:cc:00:00:02 STALE", "192.168.1.80 dev br-lan lladdr aa:bb:cc:00:00:02 STALE"]
+    head, tail = OPAL_OUTPUT.split("##NEIGH\n")[0], OPAL_OUTPUT.split("##LOCAL\n")[1]
+    for order in (lines, lines[::-1]):
+        parsed = sources.parse_opal(f"{head}##NEIGH\n" + "\n".join(order) + f"\n##LOCAL\n{tail}")
+        assert parsed["neigh"]["aa:bb:cc:00:00:02"] == "192.168.1.80"

@@ -101,26 +101,38 @@ def _networks(text):
     return nets
 
 
+def _pick_neighbors(entries, nets):
+    """(ip, mac, state) ARP entries → ({mac: ip}, {mac: state}), netmap's policy for both transports.
+
+    One IP per MAC: the freshest entry wins (a STALE entry left over from an old lease must not hide the
+    current one), FAILED/INCOMPLETE entries are ignored, and so are addresses outside the Opal's own networks
+    (e.g. a device's setup-mode address), which no monitor could reach. On a tie the lowest IP wins, so the
+    result does not depend on the table order (the kernel lists it in hash order, netstatus sorted by IP)."""
+    best = {}
+    for ip, mac, state in entries:
+        if not mac or state in ("FAILED", "INCOMPLETE"):
+            continue
+        try:
+            address = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if nets and not any(address in net for net in nets):
+            continue
+        mac, key = norm_mac(mac), (NEIGH_RANK.get(state, 4), int(address))
+        if mac not in best or key < best[mac][0]:
+            best[mac] = (key, ip, state)
+    return ({mac: ip for mac, (_rank, ip, _state) in best.items()},
+            {mac: state for mac, (_rank, _ip, state) in best.items()})
+
+
 def parse_opal(output):
     parts = dict(re.findall(r"##(\w+)\n(.*?)(?=\n##\w+\n|\Z)", output, re.S))
-    # One IP per MAC: the freshest entry wins (a STALE entry left over from an old lease must not hide the
-    # current one), FAILED/INCOMPLETE entries are ignored, and so are addresses outside the Opal's own
-    # networks (e.g. a device's setup-mode address), which no monitor could reach.
-    nets, best = _networks(parts.get("ADDR")), {}
+    entries = []
     for m in re.finditer(r"^(\d+\.\d+\.\d+\.\d+)\s+dev\s+\S+\s+lladdr\s+([0-9a-fA-F:]{17})(.*)$",
                          parts.get("NEIGH", ""), re.M):
-        mac, ip = norm_mac(m.group(2)), m.group(1)
         found = re.search(r"\b(REACHABLE|STALE|DELAY|PROBE|FAILED|PERMANENT|INCOMPLETE|NOARP)\b", m.group(3))
-        state = found.group(1) if found else None
-        if state in ("FAILED", "INCOMPLETE"):
-            continue
-        if nets and not any(ipaddress.ip_address(ip) in net for net in nets):
-            continue
-        rank = NEIGH_RANK.get(state, 4)
-        if mac not in best or rank < best[mac][0]:
-            best[mac] = (rank, ip, state)
-    neighbors = {mac: ip for mac, (_rank, ip, _state) in best.items()}
-    neigh_state = {mac: state for mac, (_rank, _ip, state) in best.items()}
+        entries.append((m.group(1), m.group(2), found.group(1) if found else None))
+    neighbors, neigh_state = _pick_neighbors(entries, _networks(parts.get("ADDR")))
     assoc_text = parts.get("ASSOC", "")
     matches = list(ASSOC_RX.finditer(assoc_text))
     clients = {}
@@ -148,6 +160,9 @@ def parse_opal(output):
         raw_clients = json.loads(parts.get("HOSTAPD", ""))
         if isinstance(raw_clients, dict):
             hostapd_ok = True
+            # `ubus call hostapd.<if> get_clients` answers {"freq": …, "clients": {mac: {…}}}
+            if isinstance(raw_clients.get("clients"), dict):
+                raw_clients = raw_clients["clients"]
             for raw_mac, details in raw_clients.items():
                 if not isinstance(details, dict) or details.get("assoc") is not True or details.get("authorized") is not True:
                     continue
